@@ -213,6 +213,9 @@ async function main() {
       await win.locator('.pr-toolbar [data-v="ink"]').click()
       await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(1200)
       await win.locator('.pr-toolbar [data-act="pen"][data-v="fountain"]').click(); await win.waitForTimeout(200)
+      // 白板层正好铺满手写区:界面缩放 ≠ 100% 时不许多盖出去(多出来的那圈会吃掉旁边面板的点击),也不许盖不满
+      const cover = await win.evaluate(() => { const o = document.querySelector('.pr-board').getBoundingClientRect(), i = document.querySelector('.pr-board .am-plugin-board').getBoundingClientRect(); return [o.width, o.height, i.width, i.height].map((v) => Math.round(v * 10) / 10) })
+      check('⑧ 白板层正好铺满手写区(误差 < 1.5px)', Math.abs(cover[0] - cover[2]) < 1.5 && Math.abs(cover[1] - cover[3]) < 1.5, JSON.stringify(cover))
       const p = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
       const sx = p.x + p.width * 0.55, sy = p.y + p.height * 0.5
       await win.mouse.move(sx, sy); await win.mouse.down()
