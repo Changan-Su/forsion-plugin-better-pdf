@@ -94,6 +94,7 @@ const M: Record<string, [string, string]> = {
   'copy.done': ['已复制', 'Copied'],
   'save.failed': ['批注没能保存', 'Annotations could not be saved'],
   'save.broken': ['旧的批注文件读不出来,已另存为 {name},这次从空白开始。', 'The old annotation file could not be read. It was kept as {name}; starting from blank.'],
+  'save.brokenStuck': ['批注文件读不出来,也没能另存一份。为了不动原件,这次打开只读,新批注不会保存。', 'The annotation file could not be read or backed up. To leave it untouched, this session is read-only and new annotations are not saved.'],
   'save.newer': ['这份批注是更新版本的插件写的,为免损坏,这里只读。', 'These annotations were written by a newer version of the plugin and are read-only here.'],
   'export.done': ['已导出到 {name}', 'Exported to {name}'],
   'export.failed': ['导出失败', 'Export failed'],

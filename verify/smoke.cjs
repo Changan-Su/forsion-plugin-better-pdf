@@ -90,6 +90,7 @@ async function main() {
   const plug = path.join(home, 'plugins', 'pdf-reader'); fs.mkdirSync(plug, { recursive: true })
   for (const f of ['main.js', 'manifest.json']) fs.copyFileSync(path.join(HERE, f), path.join(plug, f))
   const sidecar = path.join(vault, FOLDER, `.${PDF}.annot.json`)
+  let hasInk = false
   const readSidecar = () => (fs.existsSync(sidecar) ? JSON.parse(fs.readFileSync(sidecar, 'utf8')) : null)
   const pdfBefore = fs.readFileSync(path.join(vault, FOLDER, PDF))
   const errors = []
@@ -104,7 +105,7 @@ async function main() {
     check('① 刚装好没有任何批注', readSidecar() === null && await win.locator('.pr-marks > *').count() === 0)
     const tabs = await win.locator('[data-pdfmock], .pr-panel').count()
     check('① 右栏开出了批注列表', tabs >= 1 && await win.locator('.pr-listhead').count() === 1)
-    const hasInk = await win.locator('.pr-toolbar [data-act="tool"][data-v="ink"]').count() === 1
+    hasInk = await win.locator('.pr-toolbar [data-act="tool"][data-v="ink"]').count() === 1
 
     // ② 选中一句 → 浮条 → 点第一颗颜色 = 高亮
     const b1 = await dragSelect(win, S1)
@@ -121,6 +122,7 @@ async function main() {
     check('② PDF 文件一个字节没动', Buffer.compare(pdfBefore, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0)
 
     // ③ 点这条高亮 → 批注卡:写评论、打标签、换色
+    await win.waitForTimeout(500) // 刚划完 0.35 秒内的点击阅读器故意不理(那是划选收尾的那一下)
     await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForTimeout(300)
     check('③ 点高亮弹出批注卡', await win.locator('.pr-card').isVisible())
     await win.locator('.pr-card textarea').fill('核心论点,回看才值钱。')
@@ -239,6 +241,16 @@ async function main() {
       await until(() => readSidecar().ink?.['1']?.length === 1); const n1b = await inkCount()
       check('⑧c 撤销 / 重做 / 橡皮都作用在笔迹上', n2 === 2 && n1 === 1 && n2b === 2 && n1b === 1, JSON.stringify({ n2, n1, n2b, n1b }))
       await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(1200) // 再点一次 = 回到选择
+      // ⑧d 进手写之前就选好的笔和颜色,进去第一笔就是它(引擎装载初始内容时不许把笔冲掉)
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(600)
+      await win.locator('.pr-toolbar [data-act="pen"][data-v="marker"]').click(); await win.locator('.pr-toolbar [data-act="ink-color"][data-v="#e03131"]').click()
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForTimeout(800)
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(1200)
+      const mx = p2.x + p2.width * 0.3, my = p2.y + p2.height * 0.5
+      await win.mouse.move(mx, my); await win.mouse.down(); for (let i = 1; i <= 10; i++) await win.mouse.move(mx + i * 12, my); await win.mouse.up()
+      const first = await until(() => (readSidecar().ink?.['1'] ?? []).find((e) => Math.abs(e.y - 792 * 0.5) < 6))
+      check('⑧d 进手写前选好的笔和颜色,第一笔就用上', !!first && first.strokeColor === '#e03131' && !!first.customData?.strokeOptions, JSON.stringify(first ? { c: first.strokeColor, bg: first.backgroundColor, w: first.strokeWidth, cd: Object.keys(first.customData ?? {}) } : null))
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForTimeout(1200)
       const hlStroke = readSidecar().ink?.['1']?.[0]
       check('⑧b 第 2 页、放大后画的笔迹,存的还是那一页的页内坐标', !!hlStroke && Math.abs(hlStroke.x - 612 * 0.3) < 4 && Math.abs(hlStroke.y - 792 * 0.2) < 4 && hlStroke.customData?.strokeOptions?.highlighter === true, JSON.stringify(hlStroke ? { x: hlStroke.x, y: hlStroke.y, w: hlStroke.width } : null))
       await win.screenshot({ path: path.join(SHOTS, '3c-ink-static-page2.png') })
@@ -260,6 +272,24 @@ async function main() {
     // 点开导出的那份看一眼(它也由本插件打开;原生注释由 pdf.js 画,笔迹在页面内容里)
     await win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: exported || '___' }) }).first().click().catch(() => {})
     await win.waitForTimeout(2500); await win.screenshot({ path: path.join(SHOTS, '6-exported.png') })
+    // ⑨b 再导出一次:不覆盖上一份,另起一个编号的名字
+    const origRow = () => win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: PDF }) }).first()
+    await origRow().click(); await win.waitForSelector('.pr-hl', { timeout: 15_000 }); await win.waitForTimeout(600)
+    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"]').click()
+    const exportsNow = () => fs.readdirSync(path.join(vault, FOLDER)).filter((f) => f.startsWith('Reading Fixture') && f !== PDF && f.endsWith('.pdf'))
+    await until(() => exportsNow().length === 2, 10_000)
+    check('⑨b 再导出一次不覆盖上一份', exportsNow().length === 2 && !!exported && Buffer.compare(exBytes, fs.readFileSync(path.join(vault, FOLDER, exported))) === 0, exportsNow().join(' | '))
+    // ⑧e 画完一笔马上落盘:不等 0.3 秒的攒批和 0.4 秒的防抖(退出应用时宿主不等渲染层,留在定时器里的就丢了)
+    if (hasInk) {
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(1200)
+      const q = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
+      const lx = q.x + q.width * 0.2, ly = q.y + q.height * 0.35 // 0.8 那么低的地方在窗口外面,鼠标事件到不了页面
+      const lastOnDisk = () => (readSidecar().ink?.['0'] ?? []).some((e) => Math.abs(e.y - 792 * 0.35) < 8)
+      await win.mouse.move(lx, ly); await win.mouse.down(); for (let i = 1; i <= 8; i++) await win.mouse.move(lx + i * 10, ly); await win.mouse.up()
+      const t0 = Date.now(); let ms = -1
+      while (Date.now() - t0 < 3000) { if (lastOnDisk()) { ms = Date.now() - t0; break } await new Promise((r) => setTimeout(r, 10)) }
+      check('⑧e 画完一笔 0.25 秒内就在盘上', ms >= 0 && ms < 250, ms >= 0 ? `${ms}ms` : '3 秒内都没落盘(这一笔根本没画上?)')
+    }
     check('⑨ 另存出一份带批注的 PDF,原件不变', !!exported && ['/Highlight', '/Underline', '/Square', '/Text'].every((k) => exBytes.includes(k)) && Buffer.compare(pdfBefore, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0, `${exported} ${exBytes.length}`)
   } finally { await app.close() }
 

@@ -34,6 +34,7 @@ declare const ctx: {
   app: {
     readFile(path: string): Promise<string | null>
     writeFile(path: string, text: string): Promise<void>
+    listFiles?(): Promise<string[]>
     readBytes?(path: string): Promise<Uint8Array | null>
     writeBytes?(path: string, bytes: Uint8Array): Promise<void>
     watchFile?(path: string, cb: () => void): () => void

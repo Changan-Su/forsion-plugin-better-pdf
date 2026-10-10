@@ -3,7 +3,8 @@
  *  1. 构建产物过得了宿主的装载闸,且和 src 是同步的(市场装 zip 不构建,忘了重打就是发旧代码)。
  *  2. 插件的形状:不声明 fileExtensions(.pdf 是「接管」内置类型,不是自有类型)、装好是空的、样式不外溢。
  *  3. 文案:每条都有中英两种,英文里不夹汉字,占位符两边一致。
- *  4. 批注存取的几条保命路径(读不出来的旧文件绝不覆盖、新版本写的文件只读、改名后认回来、没批注不留空文件)
+ *  4. 批注存取的几条保命路径(读不出来的旧文件绝不覆盖、新版本写的文件只读、改名后认回来、没批注不留空文件、
+ *     两个窗口不互相盖、没存上的留着重试、刚关又开不丢、窗口要关时同步写)
  *     和选区几何 —— 用内存里的假宿主跑。
  * 界面交互要真应用:见 verify/smoke.cjs。
  */
@@ -84,10 +85,15 @@ function fakeHost() {
     notify: (m) => notes.push(m),
     loadData: async () => data,
     saveData: async (v) => { data = JSON.parse(JSON.stringify(v)) },
-    app: { readBytes: async (p) => files.get(p) ?? null, writeBytes: async (p, b) => { files.set(p, b) } },
+    app: {
+      readBytes: async (p) => files.get(p) ?? null,
+      writeBytes: async (p, b) => { if (host.failWrite?.(p)) throw new Error('写不进去'); files.set(p, b) },
+    },
   }
-  return { files, notes }
+  const host = { files, notes, failWrite: null, seen: () => data?.seen ?? {} }
+  return host
 }
+const saved = (files, p) => JSON.parse(dec.decode(files.get(p)))
 const A1 = { type: 'highlight', page: 0, color: '#ffd400', quads: [[1, 2, 3, 2, 1, 0, 3, 0]], text: 'x' }
 
 await t('没批注过的 PDF 不留空文件;加一条之后落盘,内容读得回来', async () => {
@@ -135,6 +141,81 @@ await t('同一份 PDF 开两个标签共用一份批注(各写各的会互相�
   const S = await load('src/store.ts')
   const [a, b] = await Promise.all([S.acquire('E.pdf', 'fp-e'), S.acquire('E.pdf', 'fp-e')])
   A.equal(a, b); A.equal(a.refs, 2)
+})
+await t('两个窗口各开同一份 PDF:各写各的不互相盖,删掉的也不被对方带回来', async () => {
+  const { files } = fakeHost()
+  const W1 = await load('src/store.ts'), W2 = await load('src/store.ts') // 两个模块实例 = 两个窗口,共用同一个盘
+  const a = await W1.acquire('F.pdf', 'fp-f'), b = await W2.acquire('F.pdf', 'fp-f')
+  const x = a.add({ ...A1, text: '甲' }); await a.flush()
+  b.add({ ...A1, text: '乙' }); b.data.ink = { 0: [{ id: 's1', version: 1, x: 1, y: 2 }] }; b.changed(); await b.flush()
+  A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text).sort(), ['乙', '甲'])
+  A.deepEqual(b.data.annots.map((n) => n.text).sort(), ['乙', '甲'], '乙窗口内存里没并进甲写的')
+  a.remove(x.id); await a.flush()
+  const end = saved(files, '.F.pdf.annot.json')
+  A.deepEqual(end.annots.map((n) => n.text), ['乙']); A.equal(end.ink[0][0].id, 's1')
+  b.patch(b.data.annots[0].id, { comment: '改' }); await b.flush()
+  A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text), ['乙'], '甲删掉的被乙带回来了')
+})
+await t('读不出来的旧文件又没能另存:整份只读,原件一个字节不动', async () => {
+  const host = fakeHost()
+  host.files.set('.G.pdf.annot.json', enc.encode('{ 坏'))
+  host.failWrite = (p) => p.includes('.broken-')
+  const S = await load('src/store.ts')
+  const d = await S.acquire('G.pdf', 'fp-g')
+  A.equal(d.readonly, true)
+  d.add(A1); await d.flush()
+  A.equal(dec.decode(host.files.get('.G.pdf.annot.json')), '{ 坏'); A.equal(host.files.size, 1)
+})
+await t('没存上的不算存了:关标签时再试,还不成就留在内存里,重开还在', async () => {
+  const host = fakeHost()
+  const S = await load('src/store.ts')
+  const d = await S.acquire('H.pdf', 'fp-h')
+  host.failWrite = () => true
+  d.add(A1); await d.flush()
+  A.equal(d.dirty, true); A.equal(host.files.size, 0)
+  S.release(d); await d.flush(); await new Promise((r) => setTimeout(r))
+  const again = await S.acquire('H.pdf', 'fp-h')
+  A.equal(again, d, '没存上的那份被丢了'); A.equal(again.data.annots.length, 1)
+  host.failWrite = null
+  S.release(again); await again.flush()
+  A.equal(saved(host.files, '.H.pdf.annot.json').annots.length, 1)
+})
+await t('刚关又开:还在落盘的那份不被提前丢掉,两次的批注都在', async () => {
+  const { files } = fakeHost()
+  const S = await load('src/store.ts')
+  const d = await S.acquire('I.pdf', 'fp-i')
+  d.add({ ...A1, text: '一' }); S.release(d)
+  const d2 = await S.acquire('I.pdf', 'fp-i')
+  A.equal(d2, d)
+  d2.add({ ...A1, text: '二' }); S.release(d2)
+  const d3 = await S.acquire('I.pdf', 'fp-i')
+  await d3.flush()
+  A.deepEqual(d3.data.annots.map((n) => n.text), ['一', '二']); A.deepEqual(saved(files, '.I.pdf.annot.json').annots.map((n) => n.text), ['一', '二'])
+})
+await t('认领只认指纹对得上的;新位置没落成之前,记的路径不改', async () => {
+  const host = fakeHost()
+  const S = await load('src/store.ts')
+  const d = await S.acquire('旧/J.pdf', 'fp-j'); d.add(A1); await d.flush(); await new Promise((r) => setTimeout(r))
+  A.equal(host.seen()['fp-j'], '旧/.J.pdf.annot.json')
+  host.failWrite = (p) => p.startsWith('新/')
+  const moved = await S.acquire('新/J.pdf', 'fp-j'); await moved.flush()
+  A.equal(moved.data.annots.length, 1); A.equal(host.seen()['fp-j'], '旧/.J.pdf.annot.json', '新位置没写成,却把记的路径改了')
+  // 旧路径上现在是另一篇文档的批注:不认
+  host.files.set('旧/.J.pdf.annot.json', enc.encode(JSON.stringify({ version: 1, fingerprint: 'fp-别的', annots: [{ ...A1, id: 'z', created: '', modified: '' }], ink: {} })))
+  const S2 = await load('src/store.ts')
+  A.equal((await S2.acquire('别处/J.pdf', 'fp-j')).data.annots.length, 0)
+})
+await t('窗口要关时的最后一写是同步发出去的(不等定时器、不等别的 Promise)', async () => {
+  const host = fakeHost()
+  const S = await load('src/store.ts')
+  const d = await S.acquire('K.pdf', 'fp-k')
+  d.add(A1)
+  let called = false
+  const w = globalThis.ctx.app.writeBytes
+  globalThis.ctx.app.writeBytes = (p, b) => { called = true; return w(p, b) }
+  S.flushAllNow()
+  A.equal(called, true); await 0
+  A.equal(saved(host.files, '.K.pdf.annot.json').annots.length, 1)
 })
 await t('选区几何:同一行的碎块并成一条,分栏不连', async () => {
   const G = await load('src/geom.ts')

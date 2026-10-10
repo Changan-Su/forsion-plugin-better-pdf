@@ -8,7 +8,7 @@ import css from './style.css'
 import { scopedViewerCss } from './pdf'
 import { allReaders, mountReader, openPanel } from './reader'
 import { mountAnnots, mountChat, mountOutline } from './panel'
-import { flushAll } from './store'
+import { flushAll, flushAllNow } from './store'
 import { t } from './i18n'
 
 function injectCss(): void {
@@ -18,6 +18,20 @@ function injectCss(): void {
   if (!el) { el = document.createElement('style'); el.id = ID; document.head.append(el) }
   el.textContent = `${scopedViewerCss()}\n${css}`
 }
+
+/** 窗口要关 / 插件要停:手上的东西先收进数据,再把没落盘的直接写下去(平时是改完 0.4 秒后写)。
+ *  两处都必须同步做完 —— 停用时宿主跑完这个函数就收走写盘接口。 */
+function saveNow(): void {
+  for (const r of allReaders()) r.settle()
+  flushAllNow()
+}
+/** 窗口退到后面(切走、最小化):接着可能就是退出应用,而宿主退出时不给渲染层收尾的机会 —— 现在就写。 */
+function saveSoon(): void {
+  if (document.visibilityState === 'visible' && document.hasFocus()) return
+  for (const r of allReaders()) r.settle(false) // 正打着的字由文字框自己的失焦去收
+  flushAll()
+}
+let dispose: (() => void) | undefined
 
 // 读写 PDF 和旁挂文件都走二进制接口;没有它的宿主也没有「接管 .pdf」,整个插件不出场。
 if (ctx.app.readBytes && ctx.app.writeBytes) {
@@ -42,7 +56,17 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
     ctx.registerView({ id: 'outline', title: t('view.outline'), icon: 'bulleted-list', mount: (el) => { injectCss(); return mountOutline(el) } })
     ctx.registerView({ id: 'chat', title: t('view.chat'), icon: 'callout-note', mount: (el) => { injectCss(); return mountChat(el) } })
     ctx.subscribeLocale?.(() => { for (const r of allReaders()) r.relocale() })
-    // 窗口要关了:把还没落盘的批注写掉(平时是改完 0.4 秒后写)。
-    window.addEventListener('pagehide', flushAll)
+    window.addEventListener('pagehide', saveNow)
+    window.addEventListener('blur', saveSoon)
+    document.addEventListener('visibilitychange', saveSoon)
+    dispose = () => {
+      saveNow()
+      window.removeEventListener('pagehide', saveNow)
+      window.removeEventListener('blur', saveSoon)
+      document.removeEventListener('visibilitychange', saveSoon)
+    }
   }
 }
+
+/** 宿主停用 / 重载插件时先调它(这时 ctx 还能用),build.mjs 的 footer 把它 return 给宿主。 */
+export default (): void => dispose?.()

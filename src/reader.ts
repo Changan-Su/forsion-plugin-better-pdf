@@ -163,7 +163,7 @@ export class Reader {
       const doc = await acquire(this.pdfPath, pdf.fingerprints?.[0] ?? '')
       if (this.dead) { release(doc); return }
       this.doc = doc
-      this.off.push(doc.subscribe(() => { this.repaint(); this.emit() }))
+      this.off.push(doc.subscribe(() => { this.repaint(); this.ink?.onDocChanged(); this.emit() }))
       this.viewer.setDocument(pdf)
       this.linkService.setDocument(pdf, null)
       this.viewer.findController.setDocument(pdf)
@@ -769,6 +769,12 @@ export class Reader {
     this.root.remove()
     readers.delete(this)
     if (active === this) setActive([...readers].pop() ?? null)
+  }
+
+  /** 窗口要关 / 插件要停:把还在手上的东西(正打着的字、最后一笔)收进数据。 */
+  settle(text = true): void {
+    if (text) this.commitText(document.activeElement as HTMLElement | null)
+    this.ink?.settle()
   }
 
   /** 页面上的文字框失焦:内容收进数据;空的就删掉。 */

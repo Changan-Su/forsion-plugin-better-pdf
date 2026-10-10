@@ -117,9 +117,13 @@ export async function exportAnnotated(r: Reader): Promise<void> {
         await drawInk(doc.getPage(Number(p)), vp1, els.filter((e) => !isHighlighter(e)), false)
       }
     }
-    const dir = dirOf(r.pdfPath)
-    const name = `${t('export.name', { name: stemOf(r.pdfPath) })}.pdf`
-    await ctx.app.writeBytes!(`${dir ? `${dir}/` : ''}${name}`, await doc.save({ useObjectStreams: false }))
+    const dir = dirOf(r.pdfPath), at = (n: string): string => `${dir ? `${dir}/` : ''}${n}`
+    // 不覆盖已有的文件(可能是上一次导出后又动过的,也可能是用户自己的):重名就往后编号。
+    const stem = t('export.name', { name: stemOf(r.pdfPath) })
+    const taken = new Set(((await ctx.app.listFiles?.().catch(() => null)) ?? []).map((p) => p.toLowerCase()))
+    let name = `${stem}.pdf`
+    for (let n = 2; taken.has(at(name).toLowerCase()); n++) name = `${stem} ${n}.pdf`
+    await ctx.app.writeBytes!(at(name), await doc.save({ useObjectStreams: false }))
     ctx.notify?.(t('export.done', { name }), { level: 'success' })
   } catch (e) {
     console.error('[pdf-reader] 导出失败', e)

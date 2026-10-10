@@ -33,6 +33,7 @@ function centerY(e: any): number {
   return e.y + (e.height ?? 0) / 2
 }
 const sig = (els: any[] | undefined): string => (els ?? []).map((e) => `${e.id}:${e.version}`).join(',')
+const sigAll = (ink: Record<string, any[]> | undefined): string => Object.keys(ink ?? {}).sort().map((p) => `${p}=${sig(ink![p])}`).join(';')
 
 export class InkLayer {
   private handle: HostBoardHandle | null = null
@@ -45,6 +46,13 @@ export class InkLayer {
   private widths: number[] = []
   private commitTimer: ReturnType<typeof setTimeout> | null = null
   private entering = 0
+  /** 白板上有还没收进数据的改动。没动过的白板绝不提交(它手里可能是别的标签改之前的旧快照)。 */
+  private dirty = false
+  /** 白板手里那份笔迹的签名(进手写 / 提交 / 外面推进来时记)。 */
+  private held = ''
+  /** 抬笔就收:不等下面那个 300ms 的攒批(引擎收尾这一笔时再变一次,由攒批补上)。
+   *  不看 dirty:画得快时引擎的变化回调还没来得及报(实测一笔画完才报),而能在这块板上抬笔,它手里就不是旧快照。 */
+  private readonly onUp = (): void => { this.dirty = true; this.commit() }
 
   constructor(private readonly r: Reader) {}
 
@@ -129,23 +137,43 @@ export class InkLayer {
       this.tops.push(y); this.widths.push(vp.width / vp.scale)
       y += vp.height / vp.scale + GAP
     }
-    const elements: any[] = []
-    for (const [p, list] of Object.entries(r.doc.data.ink)) {
-      const o = this.origin(Number(p))
-      for (const e of list) elements.push({ ...e, x: e.x + o.x, y: e.y + o.y })
-    }
     this.board.hidden = false
+    this.board.addEventListener('pointerup', this.onUp, true)
     r.root.classList.add('pr-inking')
+    this.dirty = false
+    this.held = sigAll(r.doc.data.ink)
     this.handle = ctx.ui!.mountBoard!(this.board, {
-      scene: { elements }, viewport: this.viewport(), tool: this.mode, theme: 'light',
+      scene: { elements: this.sceneElements() }, viewport: this.viewport(), tool: this.mode, theme: 'light',
       pen: this.pen, strokeColor: this.pref.color ?? undefined, strokeWidth: this.pref.width ?? undefined,
-      onChange: () => { if (!this.commitTimer) this.commitTimer = setTimeout(() => this.commit(), 300) }, // 落笔时每一帧都来,攒一下
+      onChange: () => { this.dirty = true; if (!this.commitTimer) this.commitTimer = setTimeout(() => this.commit(), 300) }, // 落笔时每一帧都来,攒一下
       onWheel: (ev) => {
         if (ev.ctrlKey || ev.metaKey) r.onWheel(ev)
         else r.container.scrollBy(ev.deltaX, ev.deltaY)
       },
     })
   }
+
+  /** 各页存的笔迹(页内坐标)搬到连续画布上。 */
+  private sceneElements(): any[] {
+    const out: any[] = []
+    for (const [p, list] of Object.entries(this.r.doc?.data.ink ?? {})) {
+      const o = this.origin(Number(p))
+      for (const e of list) out.push({ ...e, x: e.x + o.x, y: e.y + o.y })
+    }
+    return out
+  }
+
+  /** 批注数据变了(别的标签画了一笔、别的窗口写的被并进来):跟上。自己刚提交的那次签名对得上,不动。 */
+  onDocChanged(): void {
+    const ink = this.r.doc?.data.ink
+    if (!this.handle) { for (const p of new Set([...this.svgs.keys(), ...Object.keys(ink ?? {}).map(Number)])) void this.renderPage(p); return }
+    if (this.dirty || sigAll(ink) === this.held) return
+    this.held = sigAll(ink)
+    this.handle.update({ scene: { elements: this.sceneElements() } })
+  }
+
+  /** 窗口要关 / 插件要停:最后一笔可能还在 300ms 的攒批里,立刻收进数据。 */
+  settle(): void { if (this.handle) this.commit() }
 
   /** 白板的视口:让「当前页」在白板上的位置和它在屏幕上的位置逐像素对上(相邻页最多差不到 1px 的取整)。 */
   private viewport(): HostBoardViewport {
@@ -167,7 +195,8 @@ export class InkLayer {
     if (this.commitTimer) clearTimeout(this.commitTimer)
     this.commitTimer = null
     const doc = this.r.doc
-    if (!this.handle || !doc) return
+    if (!this.handle || !doc || !this.dirty) return
+    this.dirty = false
     const ink: Record<string, any[]> = {}
     for (const e of this.handle.getScene().elements) {
       const p = this.pageOfY(centerY(e)), o = this.origin(p)
@@ -175,7 +204,11 @@ export class InkLayer {
     }
     if (Object.keys(ink).length === Object.keys(doc.data.ink).length && Object.entries(ink).every(([p, l]) => sig(l) === sig(doc.data.ink[p]))) return
     doc.data.ink = ink
+    this.held = sigAll(ink)
     doc.changed()
+    // 一笔一存:退出应用时宿主不等渲染层收尾,刚画的一笔不能留在定时器里。
+    // ponytail: 每次都是整份重写(写前还读一遍);笔迹攒到几 MB 时每笔一次读写会变重,到时按页拆文件。
+    void doc.flush()
   }
 
   private leave(): void {
@@ -184,6 +217,7 @@ export class InkLayer {
     this.commit()
     this.handle.dispose()
     this.handle = null
+    this.board.removeEventListener('pointerup', this.onUp, true)
     this.board.hidden = true
     this.board.replaceChildren()
     this.r.root.classList.remove('pr-inking')
