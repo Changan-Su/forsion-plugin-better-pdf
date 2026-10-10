@@ -7,6 +7,7 @@
 import { build } from 'esbuild'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
 const dev = process.argv.includes('--dev')
@@ -19,7 +20,7 @@ const asText = {
   },
 }
 
-const out = await build({
+export const options = {
   entryPoints: ['src/index.ts'],
   outfile: 'main.js',
   bundle: true,
@@ -33,6 +34,10 @@ const out = await build({
   plugins: [asText],
   metafile: true,
   logLevel: 'info',
-})
+}
 
-console.log(`built main.js (${(out.metafile.outputs['main.js'].bytes / 1024).toFixed(0)} KB)`)
+// 直接运行才落盘;check.mjs 只借这份配置在内存里重打一遍,核对 main.js 和 src 是不是同步。
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const out = await build(options)
+  console.log(`built main.js (${(out.metafile.outputs['main.js'].bytes / 1024).toFixed(0)} KB)`)
+}

@@ -44,6 +44,7 @@ declare const ctx: {
     getPage?(): { token: string }
     insertMarkdown?(token: string, markdown: string, where?: 'cursor' | 'start' | 'end'): boolean
     vaultRoot?(): string | null
+    hostPath?(path: string): string | null
   }
   registerFileType(def: {
     id: string; extensions: string[]; icon?: string; title?: string; override?: boolean

@@ -50,8 +50,8 @@ const setActive = (r: Reader | null): void => {
 }
 export const allReaders = (): Reader[] => [...readers]
 
-/** 右栏的对话视图挂上之后登记在这里,「问 Tangu」把引文递给它。 */
-export const chat: { mount: HostChatMount | null; folder: string | null } = { mount: null, folder: null }
+/** 右栏的对话视图挂上之后登记在这里,「问 Tangu」经 quote 把引文递给它(owner 只用来认「是不是还是我登记的那一份」)。 */
+export const chat: { owner: HostChatMount | null; folder: string | null; quote: ((text: string) => void) | null } = { owner: null, folder: null, quote: null }
 
 let panelOpened = false
 /** 把批注 / 大纲 / 对话开进右栏(宿主没有右栏时开在主区)。 */
@@ -135,7 +135,8 @@ export class Reader {
   private q<T extends HTMLElement = HTMLElement>(sel: string): T { return this.root.querySelector(sel) as T }
 
   subscribe(cb: () => void): () => void { this.subs.add(cb); return () => { this.subs.delete(cb) } }
-  private emit(): void { for (const cb of [...this.subs]) cb() }
+  /** 通知右栏的视图重画(批注、选中、页码,或一页的笔迹小图有了变化)。 */
+  emit(): void { for (const cb of [...this.subs]) cb() }
 
   get page(): number { return this.viewer.currentPageNumber || 1 }
   get pageCount(): number { return this.pdf?.numPages ?? 0 }
@@ -273,11 +274,13 @@ export class Reader {
       .map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k, k)).join('')
     const inking = this.ink && (this.tool === 'ink' || this.tool === 'eraser')
     const mid = inking ? this.ink!.toolbarHtml(btn, sep) : this.dotsHtml(this.color, 'color')
+    // 三组各自不拆行;窗口窄到一行放不下时(手写那一排最长),右边那组整组折到第二行、仍然靠右。
     this.q('.pr-toolbar').innerHTML =
-      btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden) + sep + tools + sep + mid +
-      '<span class="pr-flex"></span>' + btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden) +
+      `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
+      `<span class="pr-group">${sep}${mid}</span>` +
+      `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `<button class="pr-textbtn" data-act="note">${icon('notebook-pen', 14)}${esc(t('tool.readingNote'))}</button>` +
-      btn('panel', 'panel-right', t('tool.panel')) + btn('more', 'ellipsis', t('tool.more'))
+      `${btn('panel', 'panel-right', t('tool.panel'))}${btn('more', 'ellipsis', t('tool.more'))}</span>`
   }
 
   dotsHtml(current: string | null, act: string, colors = COLORS): string {
@@ -734,7 +737,7 @@ export class Reader {
       // 对话视图是异步挂上的:等它登记好再递引文。
       const deadline = Date.now() + 4000
       const hand = (): void => {
-        if (chat.mount && chat.folder === this.folder) chat.mount.quote(quoted)
+        if (chat.quote && chat.folder === this.folder) chat.quote(quoted)
         else if (Date.now() < deadline) setTimeout(hand, 80)
       }
       hand()

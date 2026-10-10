@@ -98,23 +98,35 @@ export function mountOutline(host: HTMLElement): () => void {
 export function mountChat(host: HTMLElement): () => void {
   let folder: string | null | undefined
   let handle: HostChatMount | null = null
+  let lastQuote: string | null = null
   const drop = (): void => {
-    if (chat.mount === handle) { chat.mount = null; chat.folder = null }
+    if (handle && chat.owner === handle) { chat.owner = null; chat.quote = null; chat.folder = null }
     handle?.dispose()
     handle = null
+  }
+  const open = (r: Reader, withFolder: boolean): void => {
+    host.innerHTML = '<div class="pr-chat"></div>'
+    const dir = r.folder
+    const h = ctx.tangu!.mountChat!(host.firstElementChild as HTMLElement, { folder: (withFolder && dir) || undefined, title: t('chat.title', { name: dir ? baseOf(dir) : baseOf(r.pdfPath) }) })
+    handle = h
+    chat.owner = h
+    chat.folder = dir
+    chat.quote = (text) => { lastQuote = text; h.quote(text) }
+    if (!withFolder && lastQuote) h.quote(lastQuote) // 退路重挂:刚才递给上一份的引文补给这一份
+    // 给了工作目录、却在这台设备上落不了地(引擎不在本机跑,比如网页版):退成不带工作目录的对话。
+    // 引文照常递得过去,只是 Agent 自己读不到这份文件。等 ready 之后再问 hostPath:应用刚启动时它会先答 null。
+    if (withFolder && dir) void h.ready.then((res) => { if (!res.ok && handle === h && ctx.app.hostPath && ctx.app.hostPath(dir) == null) { drop(); open(r, false) } })
   }
   const draw = (r: Reader | null): void => {
     const next = r ? r.folder : null
     if (next === folder) return
     folder = next
+    lastQuote = null
     drop()
     if (!r || !ctx.tangu?.mountChat) { host.innerHTML = empty(t(r ? 'chat.unavailable' : 'chat.noPdf')); return }
     // 对话按文件夹一条(宿主的规则):工作目录就是这份 PDF 所在的文件夹,Agent 用相对路径就能读到它。
     // ponytail: 放在库根的 PDF 没有文件夹可给,对话不带工作目录(引文照常递得过去,Agent 自己读不到文件)。
-    host.innerHTML = '<div class="pr-chat"></div>'
-    handle = ctx.tangu.mountChat(host.firstElementChild as HTMLElement, { folder: next || undefined, title: t('chat.title', { name: next ? baseOf(next) : baseOf(r.pdfPath) }) })
-    chat.mount = handle
-    chat.folder = next
+    open(r, true)
   }
   const off = follow(draw)
   return () => { off(); drop(); host.replaceChildren() }

@@ -8,8 +8,10 @@
 /* ── 工具栏 ── */
 .pr-toolbar, .pr-findbar {
   flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 6px 10px;
-  border-bottom: 1px solid var(--border); background: var(--bg-card, var(--surface)); user-select: none; overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--border); background: var(--bg-card, var(--surface)); user-select: none; flex-wrap: wrap; row-gap: 4px;
 }
+.pr-group { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.pr-right { margin-left: auto; }
 .pr-btn {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 26px; height: 26px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); cursor: pointer; line-height: 1;

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">PDF 阅读器 — Marked page</title>
+  <!-- Original Forsion plugin identity artwork, 2026-10-10. -->
+  <defs><linearGradient id="tile" x1="28" y1="12" x2="222" y2="252" gradientUnits="userSpaceOnUse"><stop stop-color="#5a3f36"/><stop offset="1" stop-color="#3a2722"/></linearGradient></defs>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#tile)"/>
+  <path d="M74 44h78l40 40v112a16 16 0 0 1-16 16H74a16 16 0 0 1-16-16V60a16 16 0 0 1 16-16z" fill="#f4eee2"/>
+  <path d="M152 44v26a14 14 0 0 0 14 14h26z" fill="#d9cdb8"/>
+  <rect x="80" y="104" width="78" height="20" rx="5" fill="#ffd400"/>
+  <g fill="none" stroke="#3a2722" stroke-width="8" stroke-linecap="round">
+    <path d="M86 114h66M86 144h84M86 170h52"/>
+  </g>
+  <path d="M150 190c10-16 22-18 30-8s16 6 22-6" fill="none" stroke="#e0633a" stroke-width="9" stroke-linecap="round"/>
+</svg>

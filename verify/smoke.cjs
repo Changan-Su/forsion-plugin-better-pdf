@@ -11,6 +11,7 @@ const HERE = path.resolve(__dirname, '..')
 const DESK = process.env.GENESIS_DESKTOP || path.resolve(HERE, '../../Forsion-Genesis/desktop')
 const electron = require(path.join(DESK, 'scripts/lib/launch-electron.cjs'))
 const { chromium } = require(path.join(DESK, 'node_modules/playwright-core'))
+const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs')) // 假后端:让右栏的对话接得上(不跑模型)
 const SHOTS = path.join(HERE, '.shots'); fs.mkdirSync(SHOTS, { recursive: true })
 const PDF = 'Reading Fixture.pdf'; const FOLDER = '文献'
 const S1 = 'Annotation pays off when you come back to it.'
@@ -35,7 +36,7 @@ async function makePdf(file) {
   } finally { await b.close() }
 }
 
-async function launch(home, vault) {
+async function launch(home, vault, backend) {
   const userData = path.join(home, 'userdata')
   // 未打包时 userData 是 `<dir>-dev`,两处都种上,否则会打开本机真实的开发库。
   for (const d of [userData, `${userData}-dev`]) {
@@ -44,7 +45,7 @@ async function launch(home, vault) {
   }
   const app = await electron.launch({
     args: [`--user-data-dir=${userData}`, '--lang=zh-CN', DESK], cwd: DESK,
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1', TANGU_HARNESS_QUIET: '1' },
+    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend, TANGU_HARNESS_QUIET: '1' },
   })
   const win = await app.firstWindow()
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1512, 950) })
@@ -93,7 +94,8 @@ async function main() {
   const pdfBefore = fs.readFileSync(path.join(vault, FOLDER, PDF))
   const errors = []
 
-  let { app, win } = await launch(home, vault)
+  const stub = await startStubEngine()
+  let { app, win } = await launch(home, vault, stub.url)
   win.on('pageerror', (e) => errors.push(String(e)))
   win.on('console', (m) => { if (m.type() === 'error' && /pdf-reader|pdfjs|Worker/i.test(m.text())) errors.push(m.text()) })
   try {
@@ -139,6 +141,34 @@ async function main() {
     check('④ 读书笔记里有引文、页码链接和评论', note.includes(`> ${S1}`) && note.includes(`[[${PDF}#page=1|`) && note.includes('核心论点'), `${notePath}\n${note}`)
     await win.keyboard.press('Escape')
 
+    // ④b 问 Tangu:右栏切到对话,原文挂成输入框上方的引用(不替用户发送;后端是假引擎,不跑模型)
+    await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForTimeout(300)
+    await win.locator('.pr-card [data-pop="ask"]').click()
+    const quoted = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S1), 8000)
+    check('④b 问 Tangu:引文递进右栏的对话', !!quoted, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
+    await win.screenshot({ path: path.join(SHOTS, '2b-ask.png') })
+    // ④c 大纲:右栏的第二个标签
+    const tab = win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab [aria-label="大纲"], .dv-tab:has([aria-label="大纲"])').first()
+    if (await tab.count()) {
+      await tab.click(); const n = await until(() => win.locator('.pr-outline button').count().then((c) => c >= 3 && c), 5000)
+      check('④c 大纲列出 PDF 的目录', n >= 3, `条目 ${n}`)
+      await win.locator('.pr-outline button').nth(1).click(); await win.waitForTimeout(700)
+      check('④c 点目录跳到那一页', await win.locator('.pr-pageinput').inputValue() === '2')
+      await win.locator('.pr-pageinput').fill('1'); await win.locator('.pr-pageinput').press('Enter'); await win.waitForTimeout(600)
+    } else console.log('SKIP  ④c 大纲:没找到右栏的标签(标签条的结构变了?)', await win.evaluate(() => [...document.querySelectorAll('.dv-tab')].map((t) => t.outerHTML.slice(0, 160)).join(' || ')))
+    await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
+
+    // ④d 查找 + 缩略图
+    await win.locator('.pr-toolbar [data-act="find"]').click(); await win.locator('.pr-findinput').fill('nine-page'); await win.locator('.pr-findinput').press('Enter')
+    const found = await until(() => win.locator('.pr-findcount').innerText().then((t) => /1 \/ 1/.test(t) && t), 6000)
+    check('④d 查找:数出命中并跳到那一页', !!found && await win.locator('.pr-pageinput').inputValue() === '2', String(found))
+    await win.locator('.pr-findbar [data-act="find-close"]').click()
+    await win.locator('.pr-toolbar [data-act="thumbs"]').click()
+    const thumbs = await until(() => win.evaluate(() => { const c = [...document.querySelectorAll('.pr-thumb canvas')]; return c.length === 3 && c[0].width > 100 && c.length }), 6000)
+    check('④d 缩略图栏画出三页', thumbs === 3)
+    await win.locator('.pr-thumb').first().click(); await win.waitForTimeout(500)
+    await win.locator('.pr-toolbar [data-act="thumbs"]').click(); await win.waitForTimeout(800)
+
     // ⑤ 下划线工具:选完直接成
     await win.locator('.pr-toolbar [data-v="underline"]').click()
     await dragSelect(win, S2); await until(() => readSidecar().annots.some((a) => a.type === 'underline'))
@@ -181,6 +211,39 @@ async function main() {
       const stroke = sc.ink?.['0']?.[0]
       // 存的是页内坐标(pt):起笔点应该在页宽 55%、页高 50% 附近。
       check('⑧ 笔迹是白板元素,按页存页内坐标', !!stroke && stroke.type === 'freedraw' && Math.abs(stroke.x - 612 * 0.55) < 6 && Math.abs(stroke.y - 792 * 0.5) < 6 && !!stroke.customData?.strokeOptions, JSON.stringify(stroke ? { type: stroke.type, x: stroke.x, y: stroke.y, n: stroke.points?.length, cd: Object.keys(stroke.customData ?? {}) } : null))
+      // ⑧b 手写时照常滚动 / 缩放(滚轮交回给阅读器),滚到第 2 页、放大之后再画:笔迹仍然落在指针所在的页内位置
+      await win.locator('.pr-toolbar [data-v="ink"]').click(); await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(800)
+      const top0 = await win.evaluate(() => document.querySelector('.pr-container').scrollTop)
+      await win.mouse.move(p.x + p.width / 2, p.y + 300); await win.mouse.wheel(0, 950); await win.waitForTimeout(500)
+      const top1 = await win.evaluate(() => document.querySelector('.pr-container').scrollTop)
+      check('⑧b 手写时滚轮照常滚页面', top1 - top0 > 600, `${top0} → ${top1}`)
+      const scale0 = await win.evaluate(() => getComputedStyle(document.querySelector('.pr-root .pdfViewer')).getPropertyValue('--scale-factor'))
+      await win.keyboard.down('Control'); await win.mouse.wheel(0, -60); await win.keyboard.up('Control'); await win.waitForTimeout(900)
+      const scale1 = await win.evaluate(() => getComputedStyle(document.querySelector('.pr-root .pdfViewer')).getPropertyValue('--scale-factor'))
+      check('⑧b 手写时 Ctrl + 滚轮照常缩放', Number(scale1) > Number(scale0) * 1.1, `${scale0} → ${scale1}`)
+      const p2 = await win.locator('.pr-root .page[data-page-number="2"]').boundingBox()
+      await win.locator('.pr-toolbar [data-act="pen"][data-v="highlighter"]').click(); await win.waitForTimeout(200)
+      const hx = p2.x + p2.width * 0.3, hy = p2.y + p2.height * 0.2
+      await win.mouse.move(hx, hy); await win.mouse.down(); for (let i = 1; i <= 12; i++) await win.mouse.move(hx + i * 12, hy); await win.mouse.up(); await win.waitForTimeout(500)
+      await win.screenshot({ path: path.join(SHOTS, '3b-ink-page2-zoomed.png') })
+      // ⑧c 撤销 / 重做、橡皮:再画一笔 → 撤销它 → 重做 → 用橡皮擦掉
+      await win.locator('.pr-toolbar [data-act="pen"][data-v="default"]').click()
+      const ex = p2.x + p2.width * 0.3, ey = p2.y + p2.height * 0.35
+      await win.mouse.move(ex, ey); await win.mouse.down(); for (let i = 1; i <= 10; i++) await win.mouse.move(ex + i * 12, ey); await win.mouse.up()
+      const inkCount = async () => (await until(() => readSidecar().ink?.['1']), (readSidecar().ink?.['1'] ?? []).length)
+      await until(() => readSidecar().ink?.['1']?.length === 2); const n2 = await inkCount()
+      await win.locator('.pr-toolbar [data-act="undo"]').click(); await until(() => readSidecar().ink?.['1']?.length === 1); const n1 = await inkCount()
+      await win.locator('.pr-toolbar [data-act="redo"]').click(); await until(() => readSidecar().ink?.['1']?.length === 2); const n2b = await inkCount()
+      await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(300)
+      await win.mouse.move(ex + 60, ey - 14); await win.mouse.down(); await win.mouse.move(ex + 60, ey + 14, { steps: 6 }); await win.mouse.up()
+      await until(() => readSidecar().ink?.['1']?.length === 1); const n1b = await inkCount()
+      check('⑧c 撤销 / 重做 / 橡皮都作用在笔迹上', n2 === 2 && n1 === 1 && n2b === 2 && n1b === 1, JSON.stringify({ n2, n1, n2b, n1b }))
+      await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(1200) // 再点一次 = 回到选择
+      const hlStroke = readSidecar().ink?.['1']?.[0]
+      check('⑧b 第 2 页、放大后画的笔迹,存的还是那一页的页内坐标', !!hlStroke && Math.abs(hlStroke.x - 612 * 0.3) < 4 && Math.abs(hlStroke.y - 792 * 0.2) < 4 && hlStroke.customData?.strokeOptions?.highlighter === true, JSON.stringify(hlStroke ? { x: hlStroke.x, y: hlStroke.y, w: hlStroke.width } : null))
+      await win.screenshot({ path: path.join(SHOTS, '3c-ink-static-page2.png') })
+      await win.locator('.pr-zoomsel').selectOption('page-width'); await win.waitForTimeout(600)
+      await win.evaluate(() => { document.querySelector('.pr-container').scrollTop = 0 }); await win.waitForTimeout(900)
       const ink = await win.evaluate(() => { const e = document.querySelector('.pr-ink'); const pg = document.querySelector('.pr-root .page[data-page-number="1"]').getBoundingClientRect(); const r = e?.getBoundingClientRect(); return r ? [(r.left - pg.left) / pg.width, (r.top - pg.top) / pg.height, r.width / pg.width] : null })
       check('⑧ 退出手写后静态笔迹留在原位', !!ink && Math.abs(ink[0] - 0.55) < 0.03 && ink[2] > 0.2 && ink[2] < 0.35, JSON.stringify(ink))
     } else console.log('SKIP  ⑧ 手写:这份宿主没有 ctx.ui.mountBoard(工具栏上不出现手写 / 橡皮,符合预期)')
@@ -194,18 +257,25 @@ async function main() {
     await until(findExport, 10_000); await win.waitForTimeout(400)
     const exported = findExport()
     const exBytes = exported ? fs.readFileSync(path.join(vault, FOLDER, exported)) : Buffer.alloc(0)
+    // 点开导出的那份看一眼(它也由本插件打开;原生注释由 pdf.js 画,笔迹在页面内容里)
+    await win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: exported || '___' }) }).first().click().catch(() => {})
+    await win.waitForTimeout(2500); await win.screenshot({ path: path.join(SHOTS, '6-exported.png') })
     check('⑨ 另存出一份带批注的 PDF,原件不变', !!exported && ['/Highlight', '/Underline', '/Square', '/Text'].every((k) => exBytes.includes(k)) && Buffer.compare(pdfBefore, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0, `${exported} ${exBytes.length}`)
   } finally { await app.close() }
 
   // ⑩ 重开:批注还在
-  ;({ app, win } = await launch(home, vault))
+  ;({ app, win } = await launch(home, vault, stub.url))
   try {
     await win.waitForSelector('.pr-hl', { timeout: 15_000 }).catch(() => {})
     const n = { hl: await win.locator('.pr-hl').count(), ul: await win.locator('.pr-ul').count(), note: await win.locator('.pr-note').count(), area: await win.locator('.pr-area').count(), items: await win.locator('.pr-item').count() }
     check('⑩ 关掉重开,批注都还在', n.hl >= 1 && n.ul >= 1 && n.note === 1 && n.area === 1 && n.items >= 4, JSON.stringify(n))
     await win.screenshot({ path: path.join(SHOTS, '5-reopened.png') })
+    await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'dark'; r.classList.add('dark') }); await win.waitForTimeout(500)
+    await win.mouse.click(600, 232); await win.waitForTimeout(400) // 点开那条高亮的批注卡,暗色下一起看
+    await win.screenshot({ path: path.join(SHOTS, '7-dark.png') })
   } finally { await app.close() }
 
+  await stub.close?.()
   check('全程没有页面错误', errors.length === 0, errors.slice(0, 4).join(' | '))
   console.log(fails.length ? `\n${fails.length} 项没过:${fails.join(';')}` : '\n全部通过')
   process.exit(fails.length ? 1 : 0)

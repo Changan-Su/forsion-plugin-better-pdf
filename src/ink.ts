@@ -91,6 +91,7 @@ export class InkLayer {
       this.svgs.get(page)?.el.remove()
       cur = { el: box, sig: s }
       this.svgs.set(page, cur)
+      this.r.emit() // 右栏列表里这一页的小图有了
     }
     const layer = this.r.layerOf(page, false)
     if (layer && cur.el.parentNode !== layer) layer.append(cur.el)
