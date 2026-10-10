@@ -1,0 +1,21 @@
+{
+  "name": "forsion-plugin-pdf-reader",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Forsion PDF 阅读器插件(划线 / 批注 / 手写;构建源,产物 main.js 已提交)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node check.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm run build && npm run check"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "5.7.284"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}

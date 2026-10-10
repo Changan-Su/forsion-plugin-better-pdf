@@ -1,0 +1,163 @@
+/* PDF 阅读器插件。界面色全部走宿主的主题变量;批注的五种颜色是用户内容色,不属于主题。
+   页面本身的样式来自 pdf.js(关在 .pr-root 作用域里注入,见 pdf.ts)。 */
+
+.pr-root { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--text); font-family: var(--font-ui, inherit); }
+.pr-root [hidden] { display: none !important; }
+.pr-root button { font-family: inherit; }
+
+/* ── 工具栏 ── */
+.pr-toolbar, .pr-findbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 6px 10px;
+  border-bottom: 1px solid var(--border); background: var(--bg-card, var(--surface)); user-select: none; overflow-x: auto; scrollbar-width: none;
+}
+.pr-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 26px; height: 26px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); cursor: pointer; line-height: 1;
+  transition: background var(--duration-fast, 120ms) var(--ease-out, ease);
+}
+.pr-btn:hover:not(:disabled) { background: var(--bg-hover); }
+.pr-btn:disabled { opacity: .4; cursor: default; }
+.pr-tool { min-width: 28px; height: 28px; padding: 0 5px; border-color: transparent; color: var(--text-muted); }
+.pr-tool:hover:not(:disabled) { color: var(--text); }
+.pr-tool.on { color: var(--accent-ink, var(--accent)); border-color: var(--accent-ink, var(--accent)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pr-sep { flex: 0 0 auto; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+.pr-flex { flex: 1 1 auto; }
+.pr-textbtn {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; height: 28px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font-size: var(--ui-font-meta, 12px); white-space: nowrap; cursor: pointer;
+}
+.pr-textbtn:hover { background: var(--bg-hover); }
+.pr-dots { display: inline-flex; align-items: center; gap: 3px; padding: 0 3px; flex: 0 0 auto; }
+.pr-dot { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; }
+.pr-dot::before { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
+.pr-dot.on::before { box-shadow: 0 0 0 2px var(--bg-card, var(--surface)), 0 0 0 3.5px var(--text); }
+.pr-penrow { display: inline-flex; gap: 1px; padding: 2px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); flex: 0 0 auto; }
+.pr-penrow .pr-tool { min-width: 26px; height: 24px; }
+.pr-penrow .pr-tool.on { background: var(--bg-card, var(--surface)); border-color: transparent; color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+.pr-widths { display: inline-flex; align-items: center; gap: 2px; padding: 0 3px; flex: 0 0 auto; }
+.pr-width { width: 22px; height: 22px; padding: 0; border: 0; background: transparent; cursor: pointer; display: grid; place-items: center; border-radius: 50%; }
+.pr-width::before { content: ''; width: var(--d); height: var(--d); border-radius: 50%; background: var(--text-muted); }
+.pr-width.on::before { background: var(--text); box-shadow: 0 0 0 3px var(--bg-card, var(--surface)), 0 0 0 4.5px var(--text); }
+
+.pr-findbar { gap: 4px; }
+.pr-findinput {
+  flex: 0 1 260px; min-width: 120px; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px);
+  background: var(--bg, transparent); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); outline: none;
+}
+.pr-findinput:focus { border-color: var(--accent-ink, var(--accent)); }
+.pr-findcount { min-width: 64px; padding: 0 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── 主体 ── */
+.pr-body { flex: 1 1 auto; display: flex; min-height: 0; }
+.pr-side { flex: 0 0 168px; min-height: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--bg-card, var(--surface)); }
+.pr-thumbs { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-thumb { display: block; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.pr-thumb canvas { display: block; width: 100%; aspect-ratio: 0.77; height: auto; background: #fff; border: 2px solid var(--border); border-radius: 4px; box-sizing: border-box; margin-bottom: 3px; }
+.pr-thumb.on { color: var(--accent-ink, var(--accent)); }
+.pr-thumb.on canvas { border-color: var(--accent-ink, var(--accent)); }
+
+.pr-viewport { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+/* pdf.js 要求滚动容器绝对定位。isolation:它的注释层里有很大的内联 z-index,不隔开会盖住底栏。 */
+.pr-container { position: absolute; inset: 0; overflow: auto; background: var(--overlay-light, var(--bg)); isolation: isolate; outline: none; overflow-anchor: none; }
+/* 页与页之间的留白跟着缩放走、页面在一条中轴上对齐:手写层把整份文档当一张连续的画布,页的位置必须是缩放的线性函数。 */
+.pr-root .pdfViewer {
+  --page-margin: 0 0 calc(var(--scale-factor) * 9px); --page-border: none;
+  display: flex; flex-direction: column; align-items: center; width: max-content; min-width: 100%; box-sizing: border-box; padding: 14px 20px 72px;
+}
+.pr-root .pdfViewer .page { box-shadow: 0 0 0 1px rgba(0, 0, 0, .06), 0 1px 4px rgba(0, 0, 0, .08); flex: 0 0 auto; }
+/* PDF 里已有的划线类注释是纯装饰,但它盖在文字层上、默认吃点击:不关掉的话划过线的字再也选不中。 */
+.pr-container .annotationLayer section:is(.highlightAnnotation, .underlineAnnotation, .squigglyAnnotation, .strikeoutAnnotation, .inkAnnotation) { pointer-events: none; }
+
+.pr-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--ui-font-body, 13px); background: var(--overlay-light, var(--bg)); }
+.pr-bottombar {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 4px; padding: 5px 8px;
+  background: var(--bg-card, var(--surface)); border: 1px solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow, 0 2px 10px rgba(0, 0, 0, .12));
+  font-size: var(--ui-font-meta, 12px); user-select: none; white-space: nowrap;
+}
+.pr-zoomsel, .pr-pageinput { height: 26px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; outline: none; }
+.pr-zoomsel { padding: 0 4px; }
+.pr-pageinput { width: 40px; text-align: center; }
+.pr-pagetotal { padding: 0 4px 0 2px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── 页面上的批注层 ──
+   ⚠️ .pr-layer / .pr-marks 不许有 z-index、opacity、transform:一建层叠上下文,高亮的「正片叠底」就叠不到页面上了。 */
+.pr-layer, .pr-marks { position: absolute; inset: 0; pointer-events: none; }
+.pr-marks > * {
+  position: absolute; box-sizing: border-box;
+  left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px);
+}
+.pr-hl, .pr-ul, .pr-st, .pr-area { width: calc(var(--total-scale-factor) * var(--w) * 1px); height: calc(var(--total-scale-factor) * var(--h) * 1px); }
+.pr-hl { background: var(--c); mix-blend-mode: multiply; opacity: .5; border-radius: 2px; }
+.pr-hl.sel { opacity: .78; }
+.pr-ul, .pr-st { background: linear-gradient(var(--c), var(--c)) no-repeat; background-size: 100% max(1.5px, calc(var(--total-scale-factor) * 1.1px)); }
+.pr-ul { background-position: 0 100%; }
+.pr-st { background-position: 0 55%; }
+.pr-ul.sel, .pr-st.sel { background-color: color-mix(in srgb, var(--c) 22%, transparent); }
+.pr-note {
+  width: 20px; height: 20px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px 4px 4px 1px; cursor: pointer; pointer-events: auto; z-index: 3;
+  background: var(--c); color: rgba(0, 0, 0, .62); box-shadow: 0 1px 3px rgba(0, 0, 0, .22);
+}
+.pr-note.sel, .pr-area.sel { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 32%, transparent); }
+.pr-area { border: 2px solid var(--c); border-radius: 3px; background: color-mix(in srgb, var(--c) 9%, transparent); pointer-events: auto; cursor: pointer; z-index: 3; }
+.pr-area.ghost { pointer-events: none; border-style: dashed; }
+.pr-text {
+  min-width: 1.5em; min-height: 1.3em; max-width: calc(var(--total-scale-factor) * 320px); padding: 0 2px; pointer-events: auto; z-index: 3; cursor: text;
+  font: calc(var(--total-scale-factor) * 11px) / 1.35 var(--font-ui, sans-serif); color: color-mix(in srgb, var(--c) 72%, #000); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; border-radius: 2px;
+}
+.pr-text:focus, .pr-text.sel { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 70%, #000); background: rgba(255, 255, 255, .7); }
+.pr-ink {
+  position: absolute; overflow: visible; pointer-events: none; mix-blend-mode: multiply;
+  left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px); width: calc(var(--total-scale-factor) * var(--w) * 1px);
+}
+/* 白板层:铺满视口、盖在页面上方;只在手写 / 橡皮时出现。
+   笔迹和页面「正片叠底」(静态图同样):荧光笔不盖字,深色笔看不出差别。 */
+.pr-board { position: absolute; inset: 0; z-index: 3; mix-blend-mode: multiply; }
+.pr-root.pr-inking .pr-ink { visibility: hidden; }
+
+.pr-root[data-tool="note"] .pdfViewer .page, .pr-root[data-tool="text"] .pdfViewer .page { cursor: copy; }
+.pr-root[data-tool="area"] .pdfViewer .page { cursor: crosshair; }
+.pr-root:is([data-tool="note"], [data-tool="text"], [data-tool="area"]) .textLayer { pointer-events: none; }
+
+/* ── 浮层:选中浮条 / 批注卡 / 菜单 ── */
+.pr-pop {
+  position: absolute; z-index: 6; background: var(--bg-card, var(--surface)); border: 1px solid var(--border); border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow, 0 2px 10px rgba(0, 0, 0, .12)), 0 8px 24px -8px rgba(0, 0, 0, .2); color: var(--text); font-family: var(--font-ui, inherit);
+}
+.pr-selpop { display: flex; align-items: center; gap: 2px; padding: 4px; white-space: nowrap; }
+.pr-pbtn, .pr-ibtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; min-width: 28px; padding: 0 7px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; justify-content: center; }
+.pr-pbtn.txt { color: var(--text); }
+.pr-ibtn { height: 24px; min-width: 24px; padding: 0; }
+.pr-pbtn:hover, .pr-ibtn:hover, .pr-menu button:hover { background: var(--bg-hover); color: var(--text); }
+.pr-card { width: 308px; max-width: calc(100% - 16px); }
+.pr-card-top { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 8px; border-bottom: 1px solid var(--border); }
+.pr-card-body { display: block; width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px 4px; border: 0; outline: none; resize: none; background: transparent; color: var(--text); font: var(--ui-font-body, 13px) / 1.55 var(--font-ui, inherit); }
+.pr-card-foot { display: flex; align-items: center; gap: 6px; padding: 6px 12px 10px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
+.pr-tags { display: flex; flex-wrap: wrap; gap: 5px; white-space: normal; }
+.pr-tag { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; }
+.pr-tag.add { border-style: dashed; }
+.pr-tag:not(.add):hover { text-decoration: line-through; }
+.pr-taginput { width: 108px; height: 20px; padding: 0 7px; border: 1px solid var(--accent-ink, var(--accent)); border-radius: 999px; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-caption, 11px); outline: none; }
+.pr-menu { display: flex; flex-direction: column; padding: 4px; min-width: 190px; }
+.pr-menu button { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font-size: var(--ui-font-body, 13px); text-align: left; cursor: pointer; white-space: nowrap; }
+
+/* ── 右栏:批注列表 / 大纲 / 对话 ── */
+.pr-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; color: var(--text); font-family: var(--font-ui, inherit); }
+.pr-panel-empty { padding: 28px 18px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.7; text-align: center; }
+.pr-listhead { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.pr-listhead b { font-weight: 500; color: var(--text); white-space: nowrap; }
+.pr-listfilter { flex: 1 1 auto; min-width: 0; height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; outline: none; }
+.pr-listfilter:focus { border-color: var(--accent-ink, var(--accent)); }
+.pr-list { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 10px 16px; }
+.pr-item { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding: 9px 11px 10px; text-align: left; cursor: pointer; background: var(--bg-card, var(--surface)); border: 1px solid transparent; border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow, 0 1px 3px rgba(0, 0, 0, .1)); color: var(--text); }
+.pr-item.sel { border-color: var(--accent-ink, var(--accent)); }
+.pr-item-top { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); line-height: 1; }
+.pr-kind { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; background: color-mix(in srgb, var(--c) 30%, transparent); color: color-mix(in srgb, var(--c) 55%, var(--text)); }
+.pr-quote { border-left: 2.5px solid var(--c); padding-left: 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.pr-cmt { font-size: var(--ui-font-body, 13px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pr-item .pr-tags span { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
+.pr-outline { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 6px; font-size: var(--ui-font-body, 13px); }
+.pr-outline button { display: block; width: 100%; padding: 4px 8px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-outline button:hover { background: var(--bg-hover); }
+.pr-chat { flex: 1 1 auto; min-height: 0; height: 100%; }
+.pr-inkthumb { display: block; height: 46px; border-radius: 6px; background: #fff; border: 1px solid var(--border); overflow: hidden; }
+.pr-inkthumb svg { width: 100%; height: 100%; }
