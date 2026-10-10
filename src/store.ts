@@ -216,10 +216,24 @@ export class AnnotDoc {
     this.changed()
   }
 
-  remove(id: string): void {
-    const i = this.data.annots.findIndex((x) => x.id === id)
-    if (i < 0) return
-    this.data.annots.splice(i, 1)
+  remove(id: string): void { this.removeMany([id]) }
+
+  /** 一次删几条(橡皮扫过、框选后按删除),返回删掉的那些,留给撤销。 */
+  removeMany(ids: string[]): Annot[] {
+    const gone: Annot[] = []
+    for (let i = this.data.annots.length - 1; i >= 0; i--) if (ids.includes(this.data.annots[i].id)) gone.unshift(...this.data.annots.splice(i, 1))
+    if (!gone.length) return gone
+    this.changed()
+    void this.flush()
+    return gone
+  }
+
+  /** 撤销删除:原样放回(id 不变;已经在的不重复放)。改动时间记成现在,别的窗口并进来时才认它是新的。 */
+  restore(list: Annot[]): void {
+    const have = new Set(this.data.annots.map((a) => a.id)), now = new Date().toISOString()
+    const back = list.filter((a) => !have.has(a.id))
+    if (!back.length) return
+    this.data.annots.push(...back.map((a) => ({ ...a, modified: now })))
     this.changed()
     void this.flush()
   }

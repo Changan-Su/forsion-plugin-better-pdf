@@ -24,11 +24,6 @@
 .pr-tool.on { color: var(--accent-ink, var(--accent)); border-color: var(--accent-ink, var(--accent)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .pr-sep { flex: 0 0 auto; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
 .pr-flex { flex: 1 1 auto; }
-.pr-textbtn {
-  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; height: 28px; padding: 0 10px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font-size: var(--ui-font-meta, 12px); white-space: nowrap; cursor: pointer;
-}
-.pr-textbtn:hover { background: var(--bg-hover); }
 .pr-dots { display: inline-flex; align-items: center; gap: 3px; padding: 0 3px; flex: 0 0 auto; }
 .pr-dot { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; }
 .pr-dot::before { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
@@ -91,6 +86,9 @@
 .pr-hl, .pr-ul, .pr-st, .pr-area { width: calc(var(--total-scale-factor) * var(--w) * 1px); height: calc(var(--total-scale-factor) * var(--h) * 1px); }
 .pr-hl { background: var(--c); mix-blend-mode: multiply; opacity: .5; border-radius: 2px; }
 .pr-hl.sel { opacity: .78; }
+/* 选中的批注:一圈虚线(和白板引擎选中元素的外框是一个意思)。擦到一半的先变淡,抬起才真删。 */
+.pr-marks > .sel { outline: 1.5px dashed var(--accent-ink, var(--accent)); outline-offset: 1.5px; }
+.pr-marks > .erasing { opacity: .2; }
 .pr-ul, .pr-st { background: linear-gradient(var(--c), var(--c)) no-repeat; background-size: 100% max(1.5px, calc(var(--total-scale-factor) * 1.1px)); }
 .pr-ul { background-position: 0 100%; }
 .pr-st { background-position: 0 55%; }
@@ -100,8 +98,8 @@
   background: var(--c); color: rgba(0, 0, 0, .62); box-shadow: 0 1px 3px rgba(0, 0, 0, .22);
 }
 .pr-note.sel, .pr-area.sel { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 32%, transparent); }
-.pr-area { border: 2px solid var(--c); border-radius: 3px; background: color-mix(in srgb, var(--c) 9%, transparent); pointer-events: auto; cursor: pointer; z-index: 3; }
-.pr-area.ghost { pointer-events: none; border-style: dashed; }
+/* 旧版本的「区域」框:现在画框用的是「形状」(白板元素),以前存下的照样显示,只是不再填色。 */
+.pr-area { border: 2px solid var(--c); border-radius: 3px; pointer-events: auto; cursor: pointer; z-index: 3; }
 .pr-text {
   min-width: 1.5em; min-height: 1.3em; max-width: calc(var(--total-scale-factor) * 320px); padding: 0 2px; pointer-events: auto; z-index: 3; cursor: text;
   font: calc(var(--total-scale-factor) * 11px) / 1.35 var(--font-ui, sans-serif); color: color-mix(in srgb, var(--c) 72%, #000); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; border-radius: 2px;
@@ -111,14 +109,17 @@
   position: absolute; overflow: visible; pointer-events: none; mix-blend-mode: multiply;
   left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px); width: calc(var(--total-scale-factor) * var(--w) * 1px);
 }
-/* 白板层:铺满视口、盖在页面上方;只在手写 / 橡皮时出现。
-   笔迹和页面「正片叠底」(静态图同样):荧光笔不盖字,深色笔看不出差别。 */
-.pr-board { position: absolute; inset: 0; z-index: 3; mix-blend-mode: multiply; }
-.pr-root.pr-inking .pr-ink { visibility: hidden; }
+/* 白板层:铺满视口、盖在页面上方。指针默认穿过去,该它收的时候由脚本打开(ink.ts)。
+   笔迹和页面「正片叠底」(静态图同样):荧光笔不盖字,深色笔看不出差别。
+   同一份笔迹两种画法只露一种:白板层画好了(.pr-inking)且页面没在滚 → 白板层;否则 → 各页的静态图。 */
+.pr-board { position: absolute; inset: 0; z-index: 3; mix-blend-mode: multiply; pointer-events: none; }
+.pr-root.pr-inking:not(.pr-scrolling) .pr-ink { visibility: hidden; }
+.pr-root:not(.pr-inking) .pr-board, .pr-root.pr-scrolling .pr-board { visibility: hidden; }
 
 .pr-root[data-tool="note"] .pdfViewer .page, .pr-root[data-tool="text"] .pdfViewer .page { cursor: copy; }
-.pr-root[data-tool="area"] .pdfViewer .page { cursor: crosshair; }
-.pr-root:is([data-tool="note"], [data-tool="text"], [data-tool="area"]) .textLayer { pointer-events: none; }
+.pr-root:is([data-tool="note"], [data-tool="text"]) .textLayer { pointer-events: none; }
+/* 高亮 / 下划线工具:拖的时候看到的就是松手后的样子(.pr-ghosts),浏览器自己的选区底色藏起来。 */
+.pr-root:is([data-tool="highlight"], [data-tool="underline"]) .textLayer ::selection { background: transparent; }
 
 /* ── 浮层:选中浮条 / 批注卡 / 菜单 ── */
 .pr-pop {

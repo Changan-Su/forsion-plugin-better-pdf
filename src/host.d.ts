@@ -10,10 +10,12 @@ interface HostChatMount {
 
 interface HostBoardScene { elements: readonly any[]; files?: Record<string, unknown> }
 interface HostBoardViewport { scrollX: number; scrollY: number; zoom: number }
+type HostBoardShape = 'rectangle' | 'ellipse' | 'arrow' | 'line'
+type HostBoardTool = 'selection' | 'freedraw' | 'eraser' | HostBoardShape
 interface HostBoardOptions {
   scene: HostBoardScene
   viewport: HostBoardViewport
-  tool?: 'selection' | 'freedraw' | 'eraser'
+  tool?: HostBoardTool
   pen?: string
   strokeColor?: string
   strokeWidth?: number

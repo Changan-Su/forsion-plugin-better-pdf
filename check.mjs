@@ -4,8 +4,8 @@
  *  2. 插件的形状:不声明 fileExtensions(.pdf 是「接管」内置类型,不是自有类型)、装好是空的、样式不外溢。
  *  3. 文案:每条都有中英两种,英文里不夹汉字,占位符两边一致。
  *  4. 批注存取的几条保命路径(读不出来的旧文件绝不覆盖、新版本写的文件只读、改名后认回来、没批注不留空文件、
- *     两个窗口不互相盖、没存上的留着重试、刚关又开不丢、窗口要关时同步写)
- *     和选区几何 —— 用内存里的假宿主跑。
+ *     两个窗口不互相盖、没存上的留着重试、刚关又开不丢、窗口要关时同步写、一次删几条再撤销)
+ *     和选区 / 白板元素的几何 —— 用内存里的假宿主跑。
  * 界面交互要真应用:见 verify/smoke.cjs。
  */
 import { readFileSync, readdirSync } from 'node:fs'
@@ -72,7 +72,7 @@ await t('源码里用到的文案键都在表里', () => {
   const used = new Set()
   for (const f of readdirSync('src').filter((f) => f.endsWith('.ts'))) for (const m of read(`src/${f}`).matchAll(/\bt\('([a-z]+\.[\w.-]+)'/g)) used.add(m[1])
   A.deepEqual([...used].filter((k) => !MESSAGES[k]), [])
-  for (const k of ['kind.ink', 'kind.highlight', 'tool.eraser', 'pen.thin-thick-thin', 'list.noMatch', 'chat.unavailable']) A.ok(MESSAGES[k], k) // 拼出来的键
+  for (const k of ['kind.ink', 'kind.highlight', 'kind.area', 'tool.eraser', 'tool.shape', 'pen.thin-thick-thin', 'shape.rectangle', 'shape.line', 'list.noMatch', 'chat.unavailable']) A.ok(MESSAGES[k], k) // 拼出来的键
 })
 
 // ── 4. 批注存取 + 选区几何(假宿主:内存里的库) ──
@@ -216,6 +216,36 @@ await t('窗口要关时的最后一写是同步发出去的(不等定时器、�
   S.flushAllNow()
   A.equal(called, true); await 0
   A.equal(saved(host.files, '.K.pdf.annot.json').annots.length, 1)
+})
+await t('一次删几条再撤销:原样放回(id、评论都在),不重复放,删和放都马上落盘', async () => {
+  const host = fakeHost()
+  const S = await load('src/store.ts')
+  const d = await S.acquire('U.pdf', 'fp-u')
+  const a = d.add({ ...A1, comment: '留着' }), b = d.add(A1), c = d.add(A1)
+  const gone = d.removeMany([a.id, c.id, 'nope'])
+  A.deepEqual(gone.map((x) => x.id), [a.id, c.id])
+  await d.flush()
+  A.deepEqual(saved(host.files, '.U.pdf.annot.json').annots.map((x) => x.id), [b.id])
+  d.restore(gone); d.restore(gone)
+  await d.flush()
+  const back = saved(host.files, '.U.pdf.annot.json').annots
+  A.deepEqual(back.map((x) => x.id).sort(), [a.id, b.id, c.id].sort())
+  A.equal(back.find((x) => x.id === a.id).comment, '留着')
+})
+await t('点没点中画上去的东西:线看距离,没填充的方框 / 圆只认边线,填了色的整块算,转过的按转回去算', async () => {
+  const G = await load('src/geom.ts')
+  const rect = { type: 'rectangle', x: 0, y: 0, width: 100, height: 60, backgroundColor: 'transparent' }
+  A.ok(G.hits(rect, 50, 1, 4) && G.hits(rect, 102, 30, 4), '边线上该算中')
+  A.ok(!G.hits(rect, 50, 30, 4), '没填充的方框里面不算中(里面的字要能选)')
+  A.ok(!G.hits(rect, 120, 30, 4), '框外不算')
+  A.ok(G.hits({ ...rect, backgroundColor: '#ffd43b' }, 50, 30, 4), '填了色的整块算')
+  const el = { type: 'ellipse', x: 0, y: 0, width: 100, height: 60, backgroundColor: 'transparent' }
+  A.ok(G.hits(el, 100, 30, 4) && G.hits(el, 50, 0, 4) && !G.hits(el, 50, 30, 4) && !G.hits(el, 2, 2, 4), '圆只认那一圈')
+  const line = { type: 'line', x: 10, y: 10, width: 80, height: 40, strokeWidth: 1, points: [[0, 0], [80, 40]] }
+  A.ok(G.hits(line, 50, 31, 4) && !G.hits(line, 50, 10, 4), '线看离线多远,不看外框')
+  A.deepEqual(G.boundsOf({ x: 10, y: 10, points: [[0, 0], [-20, 5], [30, -8]] }), [-10, 2, 40, 15])
+  // 转 90°:原来的上边线转到了右边(绕中心 50,30:点 (80,30) 转回去是 (50,0),在上边线上)
+  A.ok(G.hits({ ...rect, angle: Math.PI / 2 }, 80, 30, 4) && !G.hits({ ...rect, angle: Math.PI / 2 }, 50, 1, 4), '转过的元素按转回去算')
 })
 await t('选区几何:同一行的碎块并成一条,分栏不连', async () => {
   const G = await load('src/geom.ts')

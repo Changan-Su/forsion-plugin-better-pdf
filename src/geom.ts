@@ -95,3 +95,38 @@ export function toPageBox(vp1: any, x0: number, y0: number, x1: number, y1: numb
 
 /** 一条 quad → 页面 pt 的 [x, y, w, h]。 */
 export const quadBox = (vp1: any, q: number[]): [number, number, number, number] => toPageBox(vp1, q[0], q[1], q[6], q[7])
+
+// ── 白板元素(笔迹 / 形状)的几何:选择工具判断「指针底下是不是画上去的东西」用 ──
+type Bounds = [number, number, number, number]
+/** 一个白板元素不带旋转的外框。线和笔迹的 x / y 是起笔点,点列可以往回走,所以按点列算。 */
+export function boundsOf(e: any): Bounds {
+  if (!Array.isArray(e.points) || !e.points.length) return [e.x, e.y, e.x + (e.width ?? 0), e.y + (e.height ?? 0)]
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+  for (const p of e.points) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]) }
+  return [e.x + x0, e.y + y0, e.x + x1, e.y + y1]
+}
+/** 画布上的一点是不是点中了这个元素。和引擎的规矩一个意思:线看离线多远,没填充的方框 / 圆只有边线算,填了色的整块算。
+ *  ponytail: 弯的箭头按折线算、粗笔(荧光笔)按中线算,偏一点只影响「这一下归谁」,引擎自己还会再判一次。 */
+export function hits(e: any, x: number, y: number, tol: number): boolean {
+  const [x0, y0, x1, y1] = boundsOf(e)
+  if (e.angle) {
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, c = Math.cos(-e.angle), s = Math.sin(-e.angle), dx = x - cx, dy = y - cy
+    x = cx + dx * c - dy * s; y = cy + dx * s + dy * c
+  }
+  if (x < x0 - tol || x > x1 + tol || y < y0 - tol || y > y1 + tol) return false
+  if (Array.isArray(e.points) && e.points.length) {
+    const reach = tol + (e.strokeWidth ?? 1), px = x - e.x, py = y - e.y
+    for (let i = 1; i < e.points.length; i++) {
+      const [ax, ay] = e.points[i - 1], [bx, by] = e.points[i], vx = bx - ax, vy = by - ay
+      const u = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1)))
+      if (Math.hypot(px - ax - u * vx, py - ay - u * vy) <= reach) return true
+    }
+    return e.points.length === 1
+  }
+  if ((e.backgroundColor && e.backgroundColor !== 'transparent') || (e.type !== 'rectangle' && e.type !== 'ellipse' && e.type !== 'diamond')) return true
+  if (e.type === 'ellipse') {
+    const a = (x1 - x0) / 2, b = (y1 - y0) / 2
+    return a < tol || b < tol || Math.abs(Math.hypot((x - (x0 + x1) / 2) / a, (y - (y0 + y1) / 2) / b) - 1) * Math.min(a, b) <= tol
+  }
+  return !(x > x0 + tol && x < x1 - tol && y > y0 + tol && y < y1 - tol)
+}
