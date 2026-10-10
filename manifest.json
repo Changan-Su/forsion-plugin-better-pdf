@@ -1,19 +1,32 @@
 {
   "id": "pdf-reader",
-  "name": "PDF 阅读器",
+  "name": "Better PDF",
+  "nameEn": "Better PDF",
   "version": "0.1.0",
   "apiVersion": 1,
   "minAppVersion": "2.13.0",
-  "description": "读文献用的 PDF 阅读器:选中文字就能高亮、划线、写批注、打标签,也可以在页面上放便签、文字,画方框、圆、箭头;批注列表、目录和 Tangu 对话在右栏。手写和形状用的是白板的同一个引擎,画上去的东西可以点选、拖动、缩放、框选。批注存在 PDF 旁边的隐藏文件里,PDF 本身不改,需要时可以另存一份带批注的 PDF。装上后点开 PDF 就由它打开;内置的只读阅读器仍在右键菜单里。",
+  "author": "Forsion",
+  "description": "读文献用的 PDF 阅读器:选中文字就能高亮、划线、写批注、打标签,也可以在页面上放便签、文字,画方框、圆、箭头;批注列表、目录和 Tangu 对话在右栏。手写和形状用的是白板的同一个引擎,画上去的东西可以点选、拖动、缩放、框选(手写、形状、橡皮需要 2.13.1 之后的桌面版本)。批注存在 PDF 旁边的隐藏文件里,PDF 本身不改,需要时可以另存一份带批注的 PDF。装上后点开 PDF 就由它打开;内置的只读阅读器仍在右键菜单里。",
+  "descriptionEn": "A PDF reader for working through papers: select text to highlight, underline, comment and tag; place sticky notes and text on the page; draw boxes, ellipses and arrows. The annotation list, the outline and a Tangu chat sit in the right sidebar. Handwriting and shapes use the same engine as the whiteboard, so anything you draw can be selected, moved, resized and box-selected (handwriting, shapes and the eraser need a desktop version newer than 2.13.1). Annotations are saved in a hidden file next to the PDF and the PDF itself is never modified; export a copy with the annotations whenever you need one. Once installed, PDFs open with it; the built-in read-only viewer stays in the right-click menu.",
   "main": "main.js",
   "onboarding": {
     "intro": "点开库里的任意一份 PDF 就是它。批注跟着 PDF 走,PDF 文件本身不会被改动。",
     "steps": [
       { "title": "划线与批注", "description": "选中一段文字,浮条上点颜色就是高亮;也可以下划线、删除线,或直接写批注。点一条已有的高亮可以改颜色、写评论、打标签。" },
-      { "title": "便签、文字、形状", "description": "工具栏上选好工具,在页面上点一下放便签或文字;「形状」拖出方框、圆、箭头或直线(默认方框,不填充),适合圈图表。" },
+      { "title": "便签、文字、形状", "description": "工具栏上选好工具,在页面上点一下放便签或文字;「形状」拖出方框、圆、箭头或直线(默认方框,不填充),适合圈图表。形状需要 2.13.1 之后的桌面版本。" },
       { "title": "右栏", "description": "批注列表、PDF 目录和 Tangu 对话在右栏的三个标签里;点列表里的一条会跳到它在页面上的位置。" },
       { "title": "引用到笔记里", "description": "「复制引用」把原文、回到这一页的链接和你的评论复制到剪贴板,到哪篇笔记里粘贴都行。" },
-      { "title": "手写与选择", "description": "「手写」用的是白板的七支笔。回到「选择」后,画上去的笔迹和形状可以点选、拖动、缩放,从空白处拖一个框能连同划线一起选中,按删除键删掉;橡皮什么都能擦,擦错了点撤销。用手写笔时会自动进入手写笔模式:笔写字,手指只滚动页面。需要较新版本的应用;旧版本上这几个按钮不出现。" }
-    ]
+      { "title": "手写与选择", "description": "「手写」用的是白板的七支笔。回到「选择」后,画上去的笔迹和形状可以点选、拖动、缩放,从空白处拖一个框能连同划线一起选中,按删除键删掉;橡皮什么都能擦,擦错了点撤销。用手写笔时会自动进入手写笔模式:笔写字,手指只滚动页面。需要 2.13.1 之后的桌面版本;更早的版本上这几个按钮不出现。" }
+    ],
+    "en": {
+      "intro": "Open any PDF in your vault and this is what opens it. Annotations travel with the PDF; the PDF file itself is never changed.",
+      "steps": [
+        { "title": "Highlight and comment", "description": "Select some text and pick a color on the popup to highlight it; you can also underline, strike through, or write a comment. Click an existing highlight to change its color, add a comment or tag it." },
+        { "title": "Notes, text and shapes", "description": "Pick a tool on the toolbar, then click the page to place a sticky note or text. The shape tool drags out a box, ellipse, arrow or line (a box by default, no fill), handy for marking figures. Shapes need a desktop version newer than 2.13.1." },
+        { "title": "Right sidebar", "description": "The annotation list, the PDF outline and a Tangu chat live in three tabs on the right; click an item in the list to jump to its place on the page." },
+        { "title": "Quote into a note", "description": "\"Copy quote\" puts the original text, a link back to this page and your comment on the clipboard, ready to paste into any note." },
+        { "title": "Handwriting and selection", "description": "Handwriting uses the seven pens of the whiteboard. Back in the select tool, strokes and shapes can be selected, moved and resized; drag a box from an empty area to select them together with highlights, then press Delete. The eraser removes anything, and undo brings it back. With a stylus, pen mode turns on by itself: the pen writes and fingers only scroll. These need a desktop version newer than 2.13.1; on earlier versions the buttons do not appear." }
+      ]
+    }
   }
 }

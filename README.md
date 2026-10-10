@@ -1,11 +1,13 @@
-# PDF 阅读器(Forsion 插件)
+# Better PDF
 
-读文献用的 PDF 阅读器:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
+Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
+
+当前版本 **0.1.0**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
 
 - **批注不改 PDF**。每份 PDF 的批注存在它旁边的隐藏文件 `.<文件名>.pdf.annot.json` 里(坐标是 PDF 自己的坐标,换设备、换缩放都对得上)。
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
 - **手写和形状是白板的元素**。笔迹、方框、圆、箭头、直线都是宿主白板的元素,用的是宿主的白板层接口 `ctx.ui.mountBoard`;
-  「选择」工具下点选、拖动、缩放、框选它们,走的是白板引擎自己的那一套。应用版本不带这个接口时,「形状」「手写」「橡皮」三个按钮不出现,其余功能照常。
+  「选择」工具下点选、拖动、缩放、框选它们,走的是白板引擎自己的那一套。这个接口在 2.13.1 之后的桌面版本里才有。
 - **引用是复制**。「复制引用」把原文、回到这一页的链接(`[[x.pdf#page=3|第 3 页]]`)和评论放进剪贴板,到笔记里自己粘贴;插件不替你建笔记。
 - **右栏**:批注列表、PDF 目录、Tangu 对话三个标签,跟着你最近操作的那份 PDF 走。
 - **装好是空的**:不带示例 PDF,不带演示批注。
@@ -65,3 +67,25 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 - 导出的文字批注没有写外观流,个别阅读器里中文会显示成方块;划线、便签、形状、手写不受影响。
 - 页面单位不是 1 的 PDF(`/UserUnit`,极少见的超大幅面)上,手写的位置会按比例偏。
 - 没随包带 cMap / 标准字体(和内置阅读器一样),极少数老式中日韩 PDF 的字会缺。
+
+## 第三方
+
+`main.js` 里打包了下面这些库(构建时去掉了注释里的许可声明,全文见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)):
+
+- [pdf.js](https://github.com/mozilla/pdf.js)(`pdfjs-dist` 5.7.284)— Apache-2.0,© Mozilla Foundation
+- [pdf-lib](https://github.com/Hopding/pdf-lib) 1.17.1 — MIT,© 2019 Andrew Dillon;以及它依赖的 `@pdf-lib/standard-fonts`、`@pdf-lib/upng`(MIT)、`pako`(MIT 与 Zlib)、`tslib`(0BSD)
+
+本插件自己的代码按 [Apache-2.0](./LICENSE) 发布。
+
+---
+
+## English
+
+**Better PDF** is a PDF reader and annotator for Forsion, built for working through papers. Select text to highlight (five colors), underline, strike through, comment and tag; place sticky notes and text on the page; draw boxes, ellipses, arrows and lines; write by hand with the seven pens of the whiteboard. The annotation list, the PDF outline and a Tangu chat sit in the right sidebar.
+
+- **The PDF is never modified.** Annotations live in a hidden file next to it (`.<name>.pdf.annot.json`, in the PDF's own coordinates). "More → Export annotated PDF" saves a separate copy with native PDF annotations.
+- **Handwriting and shapes are whiteboard elements**, so in the select tool they can be picked, moved, resized and box-selected, and the eraser removes anything (with undo). These need a desktop version newer than 2.13.1; on 2.13.1 and earlier the three buttons do not appear and everything else works.
+- **Quoting is copying.** "Copy quote" puts the text, a link back to the page and your comment on the clipboard.
+- **It ships empty**: no sample PDF, no demo annotations.
+
+Requires desktop Forsion 2.13.0 or newer. Desktop only.
