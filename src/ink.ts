@@ -83,13 +83,14 @@ export class InkLayer {
 
   // ── 工具栏中段(手写 / 形状 / 橡皮时) ──
   toolbarHtml(btn: (act: string, ic: string, title: string, on?: boolean, v?: string) => string, sep: string): string {
+    const history = btn('undo', 'undo-2', t('tool.undo')) + btn('redo', 'redo-2', t('tool.redo'))
+    if (this.tool === 'eraser') return history // 橡皮没有笔 / 颜色 / 粗细可选
     const row = this.shaping
       ? SHAPES.map(([id, ic]) => btn('shape', ic, t(`shape.${id}`), this.shape === id, id)).join('')
       : PENS.map(([id, ic]) => btn('pen', ic, t(`pen.${id}`), this.pen === id, id)).join('')
     const widths = `<span class="pr-widths" role="group" aria-label="${esc(t('tool.width'))}">${INK_WIDTHS.map((w, i) =>
       `<button class="pr-width${this.pref.width === w ? ' on' : ''}" data-act="ink-width" data-v="${w}" style="--d:${4 + i * 2.5}px" title="${w}" aria-label="${esc(t('tool.width'))} ${w}"></button>`).join('')}</span>`
-    return `<span class="pr-penrow">${row}</span>` + sep + this.r.dotsHtml(this.pref.color, 'ink-color', INK_COLORS) + sep + widths + sep +
-      btn('undo', 'undo-2', t('tool.undo')) + btn('redo', 'redo-2', t('tool.redo'))
+    return `<span class="pr-penrow">${row}</span>` + sep + this.r.dotsHtml(this.pref.color, 'ink-color', INK_COLORS) + sep + widths + sep + history
   }
   setPen(id: string): void { this.pen = id; this.handle?.update(this.style()) }
   setShape(id: string): void { this.shape = id as HostBoardShape; if (this.shaping) { this.tool = this.shape; this.handle?.update({ tool: this.tool }) } }

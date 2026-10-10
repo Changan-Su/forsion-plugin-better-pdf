@@ -71,12 +71,14 @@ function setPenMode(on: boolean): void {
 }
 
 let panelOpened = false
-/** 把批注 / 大纲 / 对话开进右栏(宿主没有右栏时开在主区)。 */
+/** 这个窗口有没有右栏。标签移到新窗口后的那个窗口没有:三个面板没处放 —— 开进主区会把 PDF 这个标签顶掉,面板自己也因为没有阅读器是空的。 */
+export const hasRight = (): boolean => !!ctx.viewLocations?.includes('right')
+/** 把批注 / 大纲 / 对话开进右栏;没有右栏的窗口里什么都不做(对应的按钮也不出现)。 */
 export function openPanel(id: 'annots' | 'outline' | 'chat' = 'annots'): void {
-  const right = ctx.viewLocations?.includes('right')
-  const open = (v: string): void => ctx.openView(v, right ? { location: 'right' } : undefined)
+  if (!hasRight()) return
+  const open = (v: string): void => ctx.openView(v, { location: 'right' })
   // 第一次:三个标签按「批注 / 大纲 / 对话」的顺序开出来,再回到要看的那个。
-  if (right && !panelOpened) { open('annots'); open('outline'); if (ctx.tangu?.mountChat) open('chat') }
+  if (!panelOpened) { open('annots'); open('outline'); if (ctx.tangu?.mountChat) open('chat') }
   panelOpened = true
   open(id)
 }
@@ -322,7 +324,7 @@ export class Reader {
       `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
       `<span class="pr-group">${sep}${mid}</span>` +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
-      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${btn('panel', 'panel-right', t('tool.panel'))}${btn('more', 'ellipsis', t('tool.more'))}</span>`
+      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight() ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
   }
 
   dotsHtml(current: string | null, act: string, colors = COLORS): string {
@@ -491,8 +493,7 @@ export class Reader {
     // 引擎处理这次抬起的监听挂在 window 上、排在我们后面:等它处理完再看白板那边变了没有。
     setTimeout(() => {
       if (this.dead) return
-      const board = this.step(gone)
-      if (tool === 'shape' && this.tool === 'shape' && moved && board) this.setTool('select') // 和白板一样:画完一个形状回到选择
+      this.step(gone) // 形状工具画完不跳回选择:和别的工具一样,留在手上接着画(Esc / 再点一次才回去)
     }, 0)
   }
 
@@ -881,7 +882,7 @@ export class Reader {
   private ask(text: string, page: number): void {
     if (!text) return
     const quoted = `${text}\n\n— ${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
-    if (ctx.tangu?.mountChat) {
+    if (ctx.tangu?.mountChat && hasRight()) {
       openPanel('chat')
       // 对话视图是异步挂上的:等它登记好再递引文。
       const deadline = Date.now() + 4000

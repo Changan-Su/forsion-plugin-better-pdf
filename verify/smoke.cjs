@@ -209,7 +209,7 @@ async function main() {
     sc = readSidecar()
     check('⑥ 便签落盘', sc.annots.some((a) => a.type === 'note' && a.comment === '这里要回头核对样本量'), JSON.stringify(sc.annots.map((a) => [a.type, a.rect])))
 
-    // ⑥b 形状(白板元素):默认方框、不填充,拖的时候引擎自己画;画完回到选择
+    // ⑥b 形状(白板元素):默认方框、不填充,拖的时候引擎自己画;画完工具不跳走(和别的工具一样)
     const px = page1.width / 612 // 一个 pt 合多少客户区像素
     const rectOnDisk = () => (readSidecar().ink?.['0'] ?? []).find((e) => e.type === 'rectangle')
     const pageBox = () => win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
@@ -226,8 +226,9 @@ async function main() {
       await win.mouse.move(R.x + R.w, R.y + R.h, { steps: 4 }); await win.mouse.up()
       const rect = await until(() => { const r = rectOnDisk(); return r && Math.abs(r.width - R.w / px) < 4 && r }) || rectOnDisk() // 拖到一半停下截图时也会存一次,等最后那一份
       check('⑥b 方框是白板元素:不填充,存页内坐标', !!rect && rect.backgroundColor === 'transparent' && Math.abs(rect.x - 120 / px) < 4 && Math.abs(rect.y - 792 * 0.48) < 4 && Math.abs(rect.width - R.w / px) < 4 && Math.abs(rect.height - R.h / px) < 4, JSON.stringify(rect ? { x: rect.x, y: rect.y, w: rect.width, h: rect.height, bg: rect.backgroundColor, c: rect.strokeColor } : null))
-      check('⑥b 画完一个形状回到选择工具', await until(() => win.locator('.pr-toolbar [data-act="tool"][data-v="select"].on').count()) === 1)
-      await win.waitForTimeout(500)
+      await win.waitForTimeout(400) // 以前是抬起后下一拍才跳走的:等过这一拍再看
+      check('⑥b 画完一个形状还留在形状工具(不自动跳回选择)', await win.locator('.pr-toolbar [data-act="tool"][data-v="shape"].on').count() === 1 && await win.locator('.pr-toolbar [data-act="tool"][data-v="select"].on').count() === 0)
+      await win.locator('.pr-toolbar [data-act="tool"][data-v="select"]').click(); await win.waitForTimeout(500)
 
       // ⑪ 选择工具:白板层挂着也照样能选字
       await dragSelect(win, S3)
@@ -250,7 +251,7 @@ async function main() {
       const E = { x: e3.left - 44, y: e3.top - 22, w: 330, h: 70 }
       await win.mouse.move(E.x, E.y); await win.mouse.down(); await win.mouse.move(E.x + E.w, E.y + E.h, { steps: 6 }); await win.mouse.up()
       const ell = await until(() => (readSidecar().ink?.['0'] ?? []).find((e) => e.type === 'ellipse' && Math.abs(e.width - E.w / px) < 4))
-      await until(() => win.locator('.pr-toolbar [data-act="tool"][data-v="select"].on').count()); await win.waitForTimeout(400)
+      await win.locator('.pr-toolbar [data-act="tool"][data-v="select"]').click(); await win.waitForTimeout(400)
       const f3 = await sentenceBox(win, S3) // 回到选择后工具栏变回一行,页面又挪了
       await win.mouse.move(f3.left - 44 + E.w / 2, f3.top - 22, { steps: 3 }); await win.waitForTimeout(120); await win.mouse.down(); await win.mouse.up(); await win.waitForTimeout(250)
       await dragSelect(win, S3)
@@ -353,7 +354,11 @@ async function main() {
       await win.locator('.pr-toolbar [data-act="undo"]').click(); await until(() => readSidecar().ink?.['1']?.length === 1); const n1 = await inkCount()
       await win.locator('.pr-toolbar [data-act="redo"]').click(); await until(() => readSidecar().ink?.['1']?.length === 2); const n2b = await inkCount()
       await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(300)
-      await win.mouse.move(ex + 60, ey - 14); await win.mouse.down(); await win.mouse.move(ex + 60, ey + 14, { steps: 6 }); await win.mouse.up()
+      const eb = await win.evaluate(() => { const n = (q) => document.querySelectorAll(`.pr-toolbar ${q}`).length; return { pen: n('[data-act="pen"]'), color: n('[data-act="ink-color"]'), width: n('[data-act="ink-width"]'), undo: n('[data-act="undo"]'), redo: n('[data-act="redo"]') } })
+      check('⑧c 橡皮下面没有笔 / 颜色 / 粗细那一排,只留撤销和重做', eb.pen === 0 && eb.color === 0 && eb.width === 0 && eb.undo === 1 && eb.redo === 1, JSON.stringify(eb))
+      // 橡皮的工具栏短,可能从两行变回一行,页面跟着挪:重新量
+      const p2e = await win.locator('.pr-root .page[data-page-number="2"]').boundingBox(), ex2 = p2e.x + p2e.width * 0.3, ey2 = p2e.y + p2e.height * 0.35
+      await win.mouse.move(ex2 + 60, ey2 - 14); await win.mouse.down(); await win.mouse.move(ex2 + 60, ey2 + 14, { steps: 6 }); await win.mouse.up()
       await until(() => readSidecar().ink?.['1']?.length === 1); const n1b = await inkCount()
       check('⑧c 撤销 / 重做 / 橡皮都作用在笔迹上', n2 === 2 && n1 === 1 && n2b === 2 && n1b === 1, JSON.stringify({ n2, n1, n2b, n1b }))
       await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(1200) // 再点一次 = 回到选择
@@ -503,6 +508,16 @@ async function main() {
     await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'dark'; r.classList.add('dark') }); await win.waitForTimeout(500)
     await win.mouse.click(600, 232); await win.waitForTimeout(400) // 点开那条高亮的批注卡,暗色下一起看
     await win.screenshot({ path: path.join(SHOTS, '7-dark.png') })
+    // ⑬ 把标签移到新窗口:那个窗口没有右栏。PDF 得照样在 —— 插件第一次挂上时会去开批注面板,
+    //    没有右栏的窗口里宿主把它开进主区、就地顶掉 PDF 这个标签(用户看到的是「移过去是空的,点退回才回来」)。
+    await win.keyboard.press('Escape'); await win.waitForTimeout(200)
+    await win.locator('.wb-tab', { has: win.locator('.wb-tab-name', { hasText: PDF }) }).first().click({ button: 'right' }) // 标签名带后缀
+    const [w2] = await Promise.all([app.waitForEvent('window', { timeout: 20_000 }), win.locator('.ctx-menu button', { hasText: '移到新窗口' }).click()])
+    const shown = await w2.waitForSelector('.pr-root .page canvas', { timeout: 30_000 }).then(() => true, () => false)
+    await w2.waitForTimeout(1500) // 面板是挂上之后才去开的:多等一拍,被顶掉的话这时已经换走了
+    const st = await w2.evaluate(() => ({ reader: !!document.querySelector('.pr-root .page canvas'), hl: document.querySelectorAll('.pr-hl').length, panelBtn: document.querySelectorAll('.pr-toolbar [data-act="panel"]').length, kind: new URLSearchParams(location.search).get('window') }))
+    check('⑬ 标签移到新窗口后 PDF 还在(没被批注面板顶掉);那边没有右栏,工具栏上不放「面板」按钮', shown && st.reader && st.hl >= 1 && st.panelBtn === 0 && st.kind === 'detached', JSON.stringify({ shown, ...st }))
+    await w2.screenshot({ path: path.join(SHOTS, '8-new-window.png') }).catch(() => {})
   } finally { await app.close() }
 
   await stub.close?.()
