@@ -6,6 +6,7 @@
 // 跑(在 Forsion 仓根;桌面端先 npm run build 出 out/):
 //   node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒烟" --eta=4 -- node Forsion-Instrumentality-Project/forsion-plugin-pdf-reader/verify/smoke.cjs
 // GENESIS_DESKTOP=<桌面端检出> 换一份宿主(默认仓根的 Forsion-Genesis/desktop)。
+// UI_ZOOM=1.1 在界面缩放 110% 下跑同一遍(用户的开发实例就是 110%;100% 下看不见偏移类问题)。
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const HERE = path.resolve(__dirname, '..')
 const DESK = process.env.GENESIS_DESKTOP || path.resolve(HERE, '../../Forsion-Genesis/desktop')
@@ -50,6 +51,11 @@ async function launch(home, vault, backend) {
   const win = await app.firstWindow()
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1512, 950) })
   await win.waitForSelector('#root', { timeout: 30_000 }); await win.waitForTimeout(2500)
+  // UI_ZOOM=1.1:走宿主自己的界面缩放(⌘+ 存的就是这个键)。台架默认 100%,而用户的开发实例常年 110% —— 偏移类问题只在这里看得见。
+  if (process.env.UI_ZOOM) {
+    await win.evaluate((z) => localStorage.setItem('forsion_ui_zoom', z), process.env.UI_ZOOM)
+    await win.reload(); await win.waitForSelector('#root', { timeout: 30_000 }); await win.waitForTimeout(3500) // 等开屏结束再点
+  }
   for (const label of ['跳过引导', 'Skip']) { const b = win.locator(`text=${label}`).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.locator('.rb-space[aria-label="笔记"], .rb-space[aria-label="Note"]').first().click({ timeout: 15_000 })
@@ -110,6 +116,9 @@ async function main() {
     // ② 选中一句 → 浮条 → 点第一颗颜色 = 高亮
     const b1 = await dragSelect(win, S1)
     check('② 选中文字浮出浮条', await win.locator('.pr-selpop').isVisible())
+    const near = async (sel, box) => { const r = await win.locator(sel).boundingBox(); return !!r && r.x < box.right && r.x + r.width > box.left && Math.min(Math.abs(r.y + r.height - box.top), Math.abs(r.y - box.bottom)) < 40 ? true : JSON.stringify(r) }
+    const selNear = await near('.pr-selpop', b1)
+    check('② 浮条贴着选区(上下 40px 内、左右有交叠)', selNear === true, selNear === true ? '' : `${selNear} vs ${JSON.stringify(b1)}`)
     await win.screenshot({ path: path.join(SHOTS, '1-selection.png') })
     await win.locator('.pr-selpop .pr-dot').first().click(); await until(() => readSidecar()?.annots?.length === 1)
     const hl = await win.evaluate(() => [...document.querySelectorAll('.pr-hl')].map((e) => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom] }))
@@ -125,6 +134,8 @@ async function main() {
     await win.waitForTimeout(500) // 刚划完 0.35 秒内的点击阅读器故意不理(那是划选收尾的那一下)
     await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForTimeout(300)
     check('③ 点高亮弹出批注卡', await win.locator('.pr-card').isVisible())
+    const cardNear = await near('.pr-card', b1)
+    check('③ 批注卡贴着那条高亮', cardNear === true, cardNear === true ? '' : `${cardNear} vs ${JSON.stringify(b1)}`)
     await win.locator('.pr-card textarea').fill('核心论点,回看才值钱。')
     await win.locator('.pr-card .pr-tag.add').click(); await win.keyboard.type('核心'); await win.keyboard.press('Enter')
     await win.locator('.pr-card .pr-dot').nth(3).click()
@@ -220,9 +231,15 @@ async function main() {
       const top1 = await win.evaluate(() => document.querySelector('.pr-container').scrollTop)
       check('⑧b 手写时滚轮照常滚页面', top1 - top0 > 600, `${top0} → ${top1}`)
       const scale0 = await win.evaluate(() => getComputedStyle(document.querySelector('.pr-root .pdfViewer')).getPropertyValue('--scale-factor'))
+      // 缩放锚在指针下面:指针指着的那个页内位置(占页宽 / 页高的比例),缩放前后应该是同一个
+      const wx = p.x + p.width * 0.7, wy = p.y + 420
+      const under = () => win.evaluate(([x, y]) => { for (const pg of document.querySelectorAll('.pr-root .page')) { const r = pg.getBoundingClientRect(); if (y >= r.top && y <= r.bottom) return [pg.dataset.pageNumber, (x - r.left) / r.width, (y - r.top) / r.height] } return null }, [wx, wy])
+      await win.mouse.move(wx, wy); const u0 = await under()
       await win.keyboard.down('Control'); await win.mouse.wheel(0, -60); await win.keyboard.up('Control'); await win.waitForTimeout(900)
+      const u1 = await under()
       const scale1 = await win.evaluate(() => getComputedStyle(document.querySelector('.pr-root .pdfViewer')).getPropertyValue('--scale-factor'))
       check('⑧b 手写时 Ctrl + 滚轮照常缩放', Number(scale1) > Number(scale0) * 1.1, `${scale0} → ${scale1}`)
+      check('⑧b 缩放锚在指针下面(页内位置漂移 < 1.5%)', !!u0 && !!u1 && u0[0] === u1[0] && Math.abs(u0[1] - u1[1]) < 0.015 && Math.abs(u0[2] - u1[2]) < 0.015, JSON.stringify([u0, u1]))
       const p2 = await win.locator('.pr-root .page[data-page-number="2"]').boundingBox()
       await win.locator('.pr-toolbar [data-act="pen"][data-v="highlighter"]').click(); await win.waitForTimeout(200)
       const hx = p2.x + p2.width * 0.3, hy = p2.y + p2.height * 0.2

@@ -222,7 +222,11 @@ export class Reader {
     if (!ev.ctrlKey && !ev.metaKey) return
     ev.preventDefault() // 不拦的话是整个界面被浏览器缩放
     if (!this.pdf || !ev.deltaY) return
-    this.viewer.updateScale({ scaleFactor: Math.max(0.8, Math.min(1.25, Math.exp(-ev.deltaY / 200))), origin: [ev.clientX, ev.clientY], drawingDelay: 200 })
+    // pdf.js 拿「origin − 容器的 offsetLeft / offsetTop」当指针在容器里的位置(它以为自己占满整页、没有界面缩放)。
+    // 换算成它那个口径,缩放才锚在指针下面,不往一边漂。
+    const c = this.container, cr = c.getBoundingClientRect(), z = c.offsetWidth ? cr.width / c.offsetWidth : 1
+    const origin = [(ev.clientX - cr.left) / z + c.offsetLeft, (ev.clientY - cr.top) / z + c.offsetTop]
+    this.viewer.updateScale({ scaleFactor: Math.max(0.8, Math.min(1.25, Math.exp(-ev.deltaY / 200))), origin, drawingDelay: 200 })
   }
 
   private onKey(ev: KeyboardEvent): void {
