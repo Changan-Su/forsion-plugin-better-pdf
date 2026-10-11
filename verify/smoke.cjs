@@ -23,6 +23,7 @@ const S4 = 'Forty-eight readers took part.'
 /** 等到条件成立(落盘是改完 0.4 秒后的事,窗口不在前台时定时器还会被浏览器放慢)。 */
 const until = async (fn, ms = 6000) => { const end = Date.now() + ms; for (;;) { let v; try { v = await fn() } catch { v = null } if (v || Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
 const fails = []
+const LINKS = process.env.ONLY === 'links'
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
 
 async function makePdf(file) {
@@ -94,7 +95,8 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-pdfreader-'))
   const vault = path.join(home, 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
   await makePdf(path.join(vault, FOLDER, PDF))
-  fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n`) // 把 PDF 拖进笔记得到的就是这种不带页码的链接(⑭ 用)
+  // 第一条:把 PDF 拖进笔记得到的不带页码的链接(⑭);后两条:「复制引用」贴出来的带页码的链接、聊天引用那种带引语的(⑮)。
+  fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n\n[[${PDF}#page=3|第 3 页]]\n\n[[${PDF}#page=2&q=nine-page%20document|引语]]\n`)
   // PLUGIN_DIR / PLUGIN_SRC:照商店的装法放(目录叫安装名 better-pdf、整个仓原样解进去),缺省是只放 main.js + 清单、目录叫插件 id。
   const plug = path.join(home, 'plugins', process.env.PLUGIN_DIR || 'pdf-reader'); fs.mkdirSync(plug, { recursive: true })
   if (process.env.PLUGIN_SRC) fs.cpSync(process.env.PLUGIN_SRC, plug, { recursive: true })
@@ -110,6 +112,9 @@ async function main() {
   win.on('pageerror', (e) => errors.push(String(e)))
   win.on('console', (m) => { if (m.type() === 'error' && /pdf-reader|pdfjs|Worker/i.test(m.text())) errors.push(m.text()) })
   try {
+    // ONLY=links:只走最后的链接几项(⑭ ⑮),改路由 / 落点时用,一分钟内跑完(两段主流程各跳过一次)。
+    full: {
+    if (LINKS) break full
     // ① 接管:是我们的阅读器,不是内置的
     check('① 点开 PDF 由插件打开', await win.locator('.pr-root .pdfViewer .page').count() === 3 && await win.locator('.amx-pdfview').count() === 0)
     check('① 刚装好没有任何批注', readSidecar() === null && await win.locator('.pr-marks > *').count() === 0)
@@ -493,11 +498,14 @@ async function main() {
       check('⑧e 画完一笔 0.25 秒内就在盘上', ms >= 0 && ms < 250, ms >= 0 ? `${ms}ms` : '3 秒内都没落盘(这一笔根本没画上?)')
     }
     check('⑨ 另存出一份带批注的 PDF,原件不变', !!exported && ['/Highlight', '/Underline', '/Text'].every((k) => exBytes.includes(k)) && Buffer.compare(pdfBefore, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0, `${exported} ${exBytes.length}`)
+    } // full
   } finally { await app.close() }
 
   // ⑩ 重开:批注还在
   ;({ app, win } = await launch(home, vault, stub.url))
   try {
+    full: {
+    if (LINKS) break full
     await win.waitForSelector('.pr-hl', { timeout: 15_000 }).catch(() => {})
     const n = { hl: await win.locator('.pr-hl').count(), ul: await win.locator('.pr-ul').count(), note: await win.locator('.pr-note').count(), items: await win.locator('.pr-item').count() }
     check('⑩ 关掉重开,批注都还在', n.hl >= 1 && n.ul >= 1 && n.note === 1 && n.items >= (hasInk ? 4 : 3), JSON.stringify(n))
@@ -520,6 +528,7 @@ async function main() {
     const st = await w2.evaluate(() => ({ reader: !!document.querySelector('.pr-root .page canvas'), hl: document.querySelectorAll('.pr-hl').length, panelBtn: document.querySelectorAll('.pr-toolbar [data-act="panel"]').length, kind: new URLSearchParams(location.search).get('window') }))
     check('⑬ 标签移到新窗口后 PDF 还在(没被批注面板顶掉);那边没有右栏,工具栏上不放「面板」按钮', shown && st.reader && st.hl >= 1 && st.panelBtn === 0 && st.kind === 'detached', JSON.stringify({ shown, ...st }))
     await w2.screenshot({ path: path.join(SHOTS, '8-new-window.png') }).catch(() => {})
+    } // full
     // ⑭ 在笔记里点 [[x.pdf]](不带页码):也该由插件打开。用户把 PDF 拖进笔记、再点那条链接,走的就是这条路;
     //    桌面 2.13.2 及更早把笔记里的 PDF 链接直接交给内置阅读器、不问「默认打开方式」—— 在那些版本上这一项是红的。
     await win.bringToFront().catch(() => {})
@@ -535,6 +544,39 @@ async function main() {
     if (link && !via.plugin && !via.builtin) { await win.mouse.click(link.x, link.y, { modifiers: ['ControlOrMeta'] }); await until(async () => { const o = await opened(); return o.plugin || o.builtin }, 8000); via = await opened() } // 光标恰好落在链接里时,单击只是放光标
     await win.screenshot({ path: path.join(SHOTS, '9-note-link.png') })
     check('⑭ 在笔记里点 [[x.pdf]]:由插件打开,不是内置阅读器', !!link && via.plugin && !via.builtin, JSON.stringify({ link, ...via }))
+    // ⑮ 带页码 / 带引语的链接:也由插件打开,并落在那一页(「批注 → 复制引用 → 贴进笔记 → 点回去」这一圈要合得上)。
+    //    宿主经 file.onGoto 把落点交给插件;桌面 2.13.2 及更早没有这个接口、这类链接进内置阅读器 —— 在那些版本上这三项是红的。
+    const noteRow = win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: /^选题$/ }) }).first()
+    const front = () => win.evaluate(() => {
+      const r = [...document.querySelectorAll('.pr-root')].find((e) => e.offsetParent !== null)
+      return r ? { page: r.querySelector('.pr-pageinput')?.value || '', mark: r.dataset.smoke || '', find: r.querySelector('.pr-findinput')?.value || '', findOpen: !r.querySelector('.pr-findbar')?.hidden, hits: r.querySelectorAll('.textLayer .highlight').length, builtin: document.querySelectorAll('.amx-pdfview').length } : { builtin: document.querySelectorAll('.amx-pdfview').length }
+    })
+    const clickNoteLink = async (text, ok) => {
+      await noteRow.click({ modifiers: ['ControlOrMeta'] }); await win.waitForTimeout(1200) // 笔记开在旁边的标签里,PDF 那个标签留着
+      const at = await until(() => win.evaluate((x) => {
+        const e = [...document.querySelectorAll('.dv-groupview *')].find((n) => !n.closest('.t2s-srow, .wb-tab, .pr-root') && n.children.length === 0 && (n.textContent || '').trim() === x && n.getBoundingClientRect().width > 0)
+        const r = e?.getBoundingClientRect(); return r ? { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 } : null
+      }, text), 8000)
+      if (!at) return null
+      await win.mouse.click(at.x, at.y)
+      if (!(await until(async () => ok(await front()), 6000))) { await win.mouse.click(at.x, at.y, { modifiers: ['ControlOrMeta'] }); await until(async () => ok(await front()), 8000) } // 同 ⑭:单击只落了光标时再点一次
+      return front()
+    }
+    await win.evaluate(() => { const r = [...document.querySelectorAll('.pr-root')].find((e) => e.offsetParent !== null); if (r) r.dataset.smoke = 'kept' })
+    const a15 = await clickNoteLink('第 3 页', (f) => f?.page === '3')
+    check('⑮ 已开着时点带页码的链接:插件跳到第 3 页,阅读器没有重挂', a15?.page === '3' && a15.mark === 'kept' && !a15.builtin, JSON.stringify(a15))
+    const b15 = await clickNoteLink('引语', (f) => f?.page === '2' && f.hits > 0)
+    check('⑮b 带引语的链接:跳到第 2 页,引语在文字层上标出来,查找条开着', b15?.page === '2' && b15.findOpen && b15.find === 'nine-page document' && b15.hits > 0 && !b15.builtin, JSON.stringify(b15))
+    await win.screenshot({ path: path.join(SHOTS, '10-quote-link.png') })
+    const d15 = await clickNoteLink('第 3 页', (f) => f?.page === '3' && !f.findOpen)
+    check('⑮d 引语还标着时再点不带引语的链接:到第 3 页,上一条的引语撤掉、查找条收起', d15?.page === '3' && !d15.findOpen && d15.hits === 0 && d15.find === '' && d15.mark === 'kept', JSON.stringify(d15))
+    // 冷开:PDF 没开着时点带页码的链接(更常见的走法;落点比文档先到,插件要记着、排好页再跳)。
+    await win.locator('.wb-tab', { has: win.locator('.wb-tab-name', { hasText: PDF }) }).first().click({ button: 'right' })
+    await win.locator('.ctx-menu button', { hasText: '关闭' }).first().click()
+    const closed = await until(async () => (await win.locator('.pr-root').count()) === 0, 6000)
+    const c15 = await clickNoteLink('第 3 页', (f) => f?.page === '3')
+    check('⑮c 没开着时点带页码的链接:插件打开并落在第 3 页', !!closed && c15?.page === '3' && c15.mark === '' && !c15.builtin, JSON.stringify({ closed: !!closed, ...c15 }))
+    await win.screenshot({ path: path.join(SHOTS, '11-page-link-cold.png') })
   } finally { await app.close() }
 
   await stub.close?.()

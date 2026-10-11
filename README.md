@@ -2,7 +2,7 @@
 
 Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
 
-当前版本 **0.1.0**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
+当前版本 **0.1.1**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
 
 - **批注不改 PDF**。每份 PDF 的批注存在它旁边的隐藏文件 `.<文件名>.pdf.annot.json` 里(坐标是 PDF 自己的坐标,换设备、换缩放都对得上)。
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
@@ -12,10 +12,10 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
 - **右栏**:批注列表、PDF 目录、Tangu 对话三个标签,跟着你最近操作的那份 PDF 走。
 - **装好是空的**:不带示例 PDF,不带演示批注。
 
-没接管的两种打开方式仍然走内置阅读器:带页码或引文的跳转(聊天里的引用、`[[x.pdf#page=3]]`),以及笔记里的 `![[x.pdf]]` 嵌入。
+**凡是「打开这份 PDF」都归本插件**(2.13.2 之后的桌面版本):文件树、最近使用、笔记里的 `[[x.pdf]]`,带页码的 `[[x.pdf#page=3]]`(「复制引用」贴出来的就是这种,点回去落在那一页),以及聊天里的引用(落在那一页;带引语的会用查找把那句话标出来,查找条开着,关掉即清)。
+仍由内置阅读器处理的只有两样:笔记里的 `![[x.pdf]]` 嵌入,和文件树右键的「用内置阅读器打开」。库外的 PDF(聊天里按绝对路径引用的)插件读不到,也走内置阅读器。
 
-**桌面 2.13.2 及更早还有第三种**:笔记里不带页码的 `[[x.pdf]]` 链接(把 PDF 拖进笔记得到的就是它)点开也是内置阅读器 —— 那几个版本把笔记里的 PDF 链接直接交给内置阅读器,没有问「默认打开方式」。
-在这些版本上要用本插件打开,请从左侧文件树点那份 PDF。之后的桌面版本已修:不带页码的链接归本插件。
+**桌面 2.13.2 及更早**:只有从左侧文件树(和最近使用)点开才归本插件;笔记里的 PDF 链接、带页码的链接、聊天引用进的是内置阅读器 —— 那几个版本没有把这些入口交给「默认打开方式」。在这些版本上请从文件树点那份 PDF。
 
 ## 开发
 
@@ -91,6 +91,6 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 - **Quoting is copying.** "Copy quote" puts the text, a link back to the page and your comment on the clipboard.
 - **It ships empty**: no sample PDF, no demo annotations.
 
-On desktop 2.13.2 and earlier, clicking a `[[x.pdf]]` link inside a note still opens the built-in reader; open the PDF from the file tree instead. Later desktop versions route page-less PDF links to this plugin.
+On desktop versions newer than 2.13.2, every way of opening a PDF goes to this plugin: the file tree, recent items, `[[x.pdf]]` note links, page links such as `[[x.pdf#page=3]]` (what "Copy citation" produces; clicking one lands on that page) and chat citations (a quoted passage is marked through the find bar). Only `![[x.pdf]]` embeds, the explicit "Open with the built-in reader" entry and PDFs outside the vault stay with the built-in reader. On desktop 2.13.2 and earlier, note links and chat citations still open the built-in reader; open the PDF from the file tree instead.
 
 Requires desktop Forsion 2.13.0 or newer. Desktop only.

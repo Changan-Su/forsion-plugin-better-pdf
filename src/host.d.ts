@@ -8,6 +8,9 @@ interface HostChatMount {
   dispose(): void
 }
 
+/** 订阅落点(页码 1 起;quote = 要在那一页标出来的原文)。返回退订。 */
+type OnGoto = (cb: (to: { page: number; quote?: string }) => void) => () => void
+
 interface HostBoardScene { elements: readonly any[]; files?: Record<string, unknown> }
 interface HostBoardViewport { scrollX: number; scrollY: number; zoom: number }
 type HostBoardShape = 'rectangle' | 'ellipse' | 'arrow' | 'line'
@@ -51,7 +54,8 @@ declare const ctx: {
   }
   registerFileType(def: {
     id: string; extensions: string[]; icon?: string; title?: string; override?: boolean
-    mount(el: HTMLElement, file: { filePath: string }): (() => void) | void
+    /** onGoto:带页码的链接、聊天引用点过来的落点(2.13.2 之后的桌面版本才有;没有它的宿主上这类链接归内置阅读器)。 */
+    mount(el: HTMLElement, file: { filePath: string; onGoto?: OnGoto }): (() => void) | void
   }): boolean | void
   registerView(view: { id: string; title: string; icon?: string; mount(el: HTMLElement): (() => void) | void }): void
   openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' | 'bottom' }): void

@@ -43,7 +43,7 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
     title: 'PDF',
     mount(el, file) {
       injectCss()
-      const off = mountReader(el, file.filePath)
+      const off = mountReader(el, file.filePath, file.onGoto)
       // 这一程第一次打开 PDF 时把右栏的三个视图开出来;之后用户关了就不再自作主张(工具栏上有按钮)。
       if (!opened) { opened = true; openPanel('annots') }
       return off

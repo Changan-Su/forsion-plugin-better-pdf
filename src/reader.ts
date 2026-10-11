@@ -111,6 +111,11 @@ export class Reader {
   private pop: HTMLElement | null = null
   private justMade = 0
   private thumbsBuilt = false
+  private pendingGoto: { page: number; quote?: string } | null = null
+  /** 容器当前有尺寸、且页面已经按这个尺寸排过(由 ResizeObserver 维护)。 */
+  private sized = false
+  /** 查找条里现在这句是落点带来的引语(不是用户自己搜的):下一个不带引语的落点到了要把它撤掉。 */
+  private quoteFind = false
   readonly ink: InkLayer | null
 
   constructor(host: HTMLElement, readonly pdfPath: string) {
@@ -215,7 +220,7 @@ export class Reader {
       target.addEventListener(type, fn, opts)
       this.off.push(() => target.removeEventListener(type, fn, opts))
     }
-    eventBus.on('pagesinit', () => { viewer.currentScaleValue = 'page-width' })
+    eventBus.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; this.flushGoto() })
     eventBus.on('pagerendered', (e: { pageNumber: number }) => { this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1) })
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
     eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport() })
@@ -248,10 +253,12 @@ export class Reader {
     on(this.root, 'click', (ev: MouseEvent) => this.onAct(ev))
 
     const ro = new ResizeObserver(() => {
+      this.sized = container.clientHeight > 0
       if (this.dead || !this.pdf) return
       const cur = viewer.currentScaleValue
       if (cur === 'page-width' || cur === 'page-fit') viewer.currentScaleValue = cur
       this.ink?.syncViewport()
+      if (this.sized) this.flushGoto() // 在后台收到的落点,回到前台、页面按新尺寸排好之后再跳
     })
     ro.observe(container)
     this.off.push(() => ro.disconnect())
@@ -765,6 +772,35 @@ export class Reader {
     pop.style.left = `${this.container.scrollLeft + this.container.clientWidth - pop.offsetWidth - 10}px`
   }
 
+  /** 宿主送来的落点:带页码的链接(包括「复制引用」贴出去的那种)、聊天引用。
+   *  页面还没排好、或者这个标签刚从后台回来还没按新尺寸排过(sized)就先记着。后一种是实测出来的:标签在后台时
+   *  容器没有尺寸、页面被缩到最小;宿主切回标签的同一拍落点就到了,这时容器已经有高度,但页面还是缩着的、
+   *  根本滚不动,pdf.js 随即把页码改回第 1 页。要等上面那个 ResizeObserver 把缩放重算过再跳。
+   *  引语走查找:只在文字层上标出来,不写进文件;查找条跟着打开,看得见标的是什么,也关得掉。 */
+  goto(page: number, quote?: string): void {
+    if (!this.viewer.pagesCount || !this.sized) { this.pendingGoto = { page, quote }; return }
+    this.viewer.currentPageNumber = Math.min(this.pageCount, Math.max(1, Math.trunc(page) || 1))
+    const input = this.q<HTMLInputElement>('.pr-findinput'), open = !this.q('.pr-findbar').hidden
+    if (quote) {
+      input.value = quote
+      this.quoteFind = true
+      if (!open) this.toggleFind(true)
+      this.find(false, false)
+    } else if (this.quoteFind) {
+      // 上一个落点带的引语还在找(或还标着):撤掉。不撤的话它晚一步找到,会把页面从这一页拉回那句话那里。
+      this.quoteFind = false
+      input.value = ''
+      this.find(false, false)
+      if (open) this.toggleFind(false)
+    }
+  }
+
+  private flushGoto(): void {
+    const g = this.pendingGoto
+    this.pendingGoto = null
+    if (g) this.goto(g.page, g.quote)
+  }
+
   // ── 查找 ────────────────────────────────────────────────────────────────────────
   private renderFindbar(): void {
     const b = (act: string, ic: string, tip: string): string => `<button class="pr-btn pr-tool" data-act="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}</button>`
@@ -773,7 +809,7 @@ export class Reader {
     bar.innerHTML = `<input class="pr-findinput" type="search" placeholder="${esc(t('find.placeholder'))}"><span class="pr-findcount"></span>${b('find-prev', 'chevron-up', t('find.prev'))}${b('find-next', 'chevron-down', t('find.next'))}${b('find-close', 'x', t('find.close'))}`
     const input = bar.querySelector('input')!
     input.value = old
-    input.addEventListener('input', () => this.find(false, false))
+    input.addEventListener('input', () => { this.quoteFind = false; this.find(false, false) })
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this.find(true, e.shiftKey) } })
   }
 
@@ -938,9 +974,10 @@ export class Reader {
 }
 
 /** 文字框的失焦要在捕获阶段听(focusout 冒泡,但我们要在重画之前拿到内容)。 */
-export function mountReader(host: HTMLElement, pdfPath: string): () => void {
+export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto): () => void {
   const r = new Reader(host, pdfPath)
   const onOut = (e: FocusEvent): void => r.commitText(e.target as HTMLElement)
   r.root.addEventListener('focusout', onOut)
-  return () => { r.root.removeEventListener('focusout', onOut); r.dispose() }
+  const offGoto = onGoto?.((to) => r.goto(to.page, to.quote))
+  return () => { offGoto?.(); r.root.removeEventListener('focusout', onOut); r.dispose() }
 }
