@@ -71,11 +71,14 @@ function setPenMode(on: boolean): void {
 }
 
 let panelOpened = false
-/** 这个窗口有没有右栏。标签移到新窗口后的那个窗口没有:三个面板没处放 —— 开进主区会把 PDF 这个标签顶掉,面板自己也因为没有阅读器是空的。 */
-export const hasRight = (): boolean => !!ctx.viewLocations?.includes('right')
-/** 把批注 / 大纲 / 对话开进右栏;没有右栏的窗口里什么都不做(对应的按钮也不出现)。 */
-export function openPanel(id: 'annots' | 'outline' | 'chat' = 'annots'): void {
-  if (!hasRight()) return
+/** 这个阅读器旁边有没有放面板的右栏。两种没有:
+ *  ① 标签移到新窗口后的那个窗口 —— 三个面板没处放,开进主区会把 PDF 这个标签顶掉,面板自己也因为没有阅读器是空的;
+ *  ② 阅读器开在对话旁边那一格里(聊天里点引用、Agent 把 PDF 摆上台)—— 右栏一开,那一格就被顶掉,PDF 反而看不见了。
+ *  ponytail: ② 认的是宿主那一格的类名 .agent-desk(已发布的宿主上没有别的办法知道);宿主给出正式的「我在哪种容器里」之后换掉。 */
+export const hasRight = (at?: Element | null): boolean => !!ctx.viewLocations?.includes('right') && !at?.closest('.agent-desk')
+/** 把批注 / 大纲 / 对话开进右栏;没有右栏的地方什么都不做(对应的按钮也不出现)。 */
+export function openPanel(id: 'annots' | 'outline' | 'chat' = 'annots', at?: Element | null): void {
+  if (!hasRight(at)) return
   const open = (v: string): void => ctx.openView(v, { location: 'right' })
   // 第一次:三个标签按「批注 / 大纲 / 对话」的顺序开出来,再回到要看的那个。
   if (!panelOpened) { open('annots'); open('outline'); if (ctx.tangu?.mountChat) open('chat') }
@@ -300,7 +303,7 @@ export class Reader {
       case 'find-prev': this.find(true, true); break
       case 'find-next': this.find(true, false); break
       case 'find-close': this.toggleFind(false); break
-      case 'panel': openPanel('annots'); break
+      case 'panel': openPanel('annots', this.root); break
       case 'more': this.openMore(b); break
       case 'zoom-in': this.viewer.increaseScale(); break
       case 'zoom-out': this.viewer.decreaseScale(); break
@@ -331,7 +334,7 @@ export class Reader {
       `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
       `<span class="pr-group">${sep}${mid}</span>` +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
-      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight() ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
+      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
   }
 
   dotsHtml(current: string | null, act: string, colors = COLORS): string {
@@ -918,8 +921,8 @@ export class Reader {
   private ask(text: string, page: number): void {
     if (!text) return
     const quoted = `${text}\n\n— ${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
-    if (ctx.tangu?.mountChat && hasRight()) {
-      openPanel('chat')
+    if (ctx.tangu?.mountChat && hasRight(this.root)) {
+      openPanel('chat', this.root)
       // 对话视图是异步挂上的:等它登记好再递引文。
       const deadline = Date.now() + 4000
       const hand = (): void => {

@@ -6,7 +6,7 @@
 // 装好就是空的:不带示例 PDF、不带演示批注。
 import css from './style.css'
 import { scopedViewerCss } from './pdf'
-import { allReaders, mountReader, openPanel } from './reader'
+import { allReaders, hasRight, mountReader, openPanel } from './reader'
 import { mountAnnots, mountChat, mountOutline } from './panel'
 import { flushAll, flushAllNow } from './store'
 import { t } from './i18n'
@@ -45,7 +45,7 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
       injectCss()
       const off = mountReader(el, file.filePath, file.onGoto)
       // 这一程第一次打开 PDF 时把右栏的三个视图开出来;之后用户关了就不再自作主张(工具栏上有按钮)。
-      if (!opened) { opened = true; openPanel('annots') }
+      if (!opened && hasRight(el)) { opened = true; openPanel('annots', el) }
       return off
     },
   })

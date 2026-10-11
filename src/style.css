@@ -36,7 +36,8 @@
 .pr-width::before { content: ''; width: var(--d); height: var(--d); border-radius: 50%; background: var(--text-muted); }
 .pr-width.on::before { background: var(--text); box-shadow: 0 0 0 3px var(--bg-card, var(--surface)), 0 0 0 4.5px var(--text); }
 
-.pr-findbar { gap: 4px; }
+/* 不换行:窄的地方(对话旁那一格)让输入框缩,别把关闭键挤到第二行 */
+.pr-findbar { gap: 4px; flex-wrap: nowrap; }
 .pr-findinput {
   flex: 0 1 260px; min-width: 120px; height: 26px; padding: 0 8px; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px);
   background: var(--bg, transparent); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); outline: none;
