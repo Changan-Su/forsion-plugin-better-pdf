@@ -94,9 +94,11 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-pdfreader-'))
   const vault = path.join(home, 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
   await makePdf(path.join(vault, FOLDER, PDF))
-  fs.writeFileSync(path.join(vault, '选题.md'), '# 选题\n')
-  const plug = path.join(home, 'plugins', 'pdf-reader'); fs.mkdirSync(plug, { recursive: true })
-  for (const f of ['main.js', 'manifest.json']) fs.copyFileSync(path.join(HERE, f), path.join(plug, f))
+  fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n`) // 把 PDF 拖进笔记得到的就是这种不带页码的链接(⑭ 用)
+  // PLUGIN_DIR / PLUGIN_SRC:照商店的装法放(目录叫安装名 better-pdf、整个仓原样解进去),缺省是只放 main.js + 清单、目录叫插件 id。
+  const plug = path.join(home, 'plugins', process.env.PLUGIN_DIR || 'pdf-reader'); fs.mkdirSync(plug, { recursive: true })
+  if (process.env.PLUGIN_SRC) fs.cpSync(process.env.PLUGIN_SRC, plug, { recursive: true })
+  else for (const f of ['main.js', 'manifest.json']) fs.copyFileSync(path.join(HERE, f), path.join(plug, f))
   const sidecar = path.join(vault, FOLDER, `.${PDF}.annot.json`)
   let hasInk = false
   const readSidecar = () => (fs.existsSync(sidecar) ? JSON.parse(fs.readFileSync(sidecar, 'utf8')) : null)
@@ -518,6 +520,21 @@ async function main() {
     const st = await w2.evaluate(() => ({ reader: !!document.querySelector('.pr-root .page canvas'), hl: document.querySelectorAll('.pr-hl').length, panelBtn: document.querySelectorAll('.pr-toolbar [data-act="panel"]').length, kind: new URLSearchParams(location.search).get('window') }))
     check('⑬ 标签移到新窗口后 PDF 还在(没被批注面板顶掉);那边没有右栏,工具栏上不放「面板」按钮', shown && st.reader && st.hl >= 1 && st.panelBtn === 0 && st.kind === 'detached', JSON.stringify({ shown, ...st }))
     await w2.screenshot({ path: path.join(SHOTS, '8-new-window.png') }).catch(() => {})
+    // ⑭ 在笔记里点 [[x.pdf]](不带页码):也该由插件打开。用户把 PDF 拖进笔记、再点那条链接,走的就是这条路;
+    //    桌面 2.13.2 及更早把笔记里的 PDF 链接直接交给内置阅读器、不问「默认打开方式」—— 在那些版本上这一项是红的。
+    await win.bringToFront().catch(() => {})
+    await win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: /^选题$/ }) }).first().click(); await win.waitForTimeout(1500)
+    const linkAt = () => win.evaluate((name) => {
+      const hit = [...document.querySelectorAll('.dv-groupview *')].filter((e) => !e.closest('.t2s-srow, .wb-tab, .pr-root') && e.children.length === 0 && (e.textContent || '').includes(name.replace(/\.pdf$/, '')))
+      const r = hit[0]?.getBoundingClientRect(); return r && r.width > 0 ? { x: r.left + Math.min(r.width / 2, 40), y: r.top + r.height / 2, tag: hit[0].tagName, cls: String(hit[0].className).slice(0, 60) } : null
+    }, PDF)
+    const link = await until(linkAt, 8000)
+    const opened = async () => ({ plugin: await win.locator('.pr-root .pdfViewer .page').count() > 0, builtin: await win.locator('.amx-pdfview').count() > 0 })
+    if (link) { await win.mouse.click(link.x, link.y); await until(async () => { const o = await opened(); return o.plugin || o.builtin }, 8000) }
+    let via = await opened()
+    if (link && !via.plugin && !via.builtin) { await win.mouse.click(link.x, link.y, { modifiers: ['ControlOrMeta'] }); await until(async () => { const o = await opened(); return o.plugin || o.builtin }, 8000); via = await opened() } // 光标恰好落在链接里时,单击只是放光标
+    await win.screenshot({ path: path.join(SHOTS, '9-note-link.png') })
+    check('⑭ 在笔记里点 [[x.pdf]]:由插件打开,不是内置阅读器', !!link && via.plugin && !via.builtin, JSON.stringify({ link, ...via }))
   } finally { await app.close() }
 
   await stub.close?.()

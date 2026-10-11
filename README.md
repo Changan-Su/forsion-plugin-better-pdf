@@ -14,6 +14,9 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
 
 没接管的两种打开方式仍然走内置阅读器:带页码或引文的跳转(聊天里的引用、`[[x.pdf#page=3]]`),以及笔记里的 `![[x.pdf]]` 嵌入。
 
+**桌面 2.13.2 及更早还有第三种**:笔记里不带页码的 `[[x.pdf]]` 链接(把 PDF 拖进笔记得到的就是它)点开也是内置阅读器 —— 那几个版本把笔记里的 PDF 链接直接交给内置阅读器,没有问「默认打开方式」。
+在这些版本上要用本插件打开,请从左侧文件树点那份 PDF。之后的桌面版本已修:不带页码的链接归本插件。
+
 ## 开发
 
 ```bash
@@ -87,5 +90,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 - **Handwriting and shapes are whiteboard elements**, so in the select tool they can be picked, moved, resized and box-selected, and the eraser removes anything (with undo). These need a desktop version newer than 2.13.1; on 2.13.1 and earlier the three buttons do not appear and everything else works.
 - **Quoting is copying.** "Copy quote" puts the text, a link back to the page and your comment on the clipboard.
 - **It ships empty**: no sample PDF, no demo annotations.
+
+On desktop 2.13.2 and earlier, clicking a `[[x.pdf]]` link inside a note still opens the built-in reader; open the PDF from the file tree instead. Later desktop versions route page-less PDF links to this plugin.
 
 Requires desktop Forsion 2.13.0 or newer. Desktop only.
