@@ -26,12 +26,12 @@ const fails = []
 const LINKS = process.env.ONLY === 'links'
 // ONLY=parity:只走 ⑯(白板的用法:快捷键、自定义颜色、笔尾橡皮、手指连点两下),自己画自己擦,不靠前面留下的东西。
 const PARITY = process.env.ONLY === 'parity'
-// ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇八页的论文样张和一条空笔记),装好本仓的插件就停住,
+// ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇四页的论文样张和一条空笔记),装好本仓的插件就停住,
 // 不跑任何检查 —— 给人或 computer use 照真实工作流上手体验用。Ctrl-C / 杀掉本进程即收场。建议带 UI_ZOOM=1.1。
 const STAGE = process.env.ONLY === 'stage'
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
 
-/** 摆台用的样张:一篇像样的八页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
+/** 摆台用的样张:一篇像样的四页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
 async function makePaper(file) {
   const fill = [
     'Readers who annotate tend to remember the structure of an argument better than those who only read, yet the benefit depends heavily on what happens after the first pass.',
@@ -129,6 +129,7 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-pdfreader-'))
   const vault = path.join(home, STAGE ? 'ZZ-验收库' : 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
   await (STAGE ? makePaper : makePdf)(path.join(vault, FOLDER, PDF))
+  if (STAGE) fs.writeFileSync(path.join(vault, '读后记.md'), '# 读后记\n\n')
   // 第一条:把 PDF 拖进笔记得到的不带页码的链接(⑭);后两条:「复制引用」贴出来的带页码的链接、聊天引用那种带引语的(⑮)。
   fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n\n[[${PDF}#page=3|第 3 页]]\n\n[[${PDF}#page=2&q=nine-page%20document|引语]]\n`)
   // PLUGIN_DIR / PLUGIN_SRC:照商店的装法放(目录叫安装名 better-pdf、整个仓原样解进去),缺省是只放 main.js + 清单、目录叫插件 id。
@@ -146,7 +147,7 @@ async function main() {
   win.on('pageerror', (e) => errors.push(String(e)))
   win.on('console', (m) => { if (m.type() === 'error' && /pdf-reader|pdfjs|Worker/i.test(m.text())) errors.push(m.text()) })
   if (STAGE) {
-    fs.writeFileSync(path.join(vault, '读后记.md'), '# 读后记\n\n')
+    await win.screenshot({ path: path.join(SHOTS, 'stage.png') }).catch(() => {})
     console.log(`摆好了。库:${vault}\n旁挂批注文件:${sidecar}\n页面错误会接着打在下面;收场:结束本进程。`)
     win.on('pageerror', (e) => console.log(`[pageerror] ${e}`)); win.on('console', (m) => { if (m.type() === 'error') console.log(`[console.error] ${m.text()}`) })
     await new Promise((r) => { app.on('close', r); process.on('SIGINT', r); process.on('SIGTERM', r) })
