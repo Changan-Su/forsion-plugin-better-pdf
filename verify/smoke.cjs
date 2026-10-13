@@ -24,7 +24,41 @@ const S4 = 'Forty-eight readers took part.'
 const until = async (fn, ms = 6000) => { const end = Date.now() + ms; for (;;) { let v; try { v = await fn() } catch { v = null } if (v || Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
 const fails = []
 const LINKS = process.env.ONLY === 'links'
+// ONLY=parity:只走 ⑯(白板的用法:快捷键、自定义颜色、笔尾橡皮、手指连点两下),自己画自己擦,不靠前面留下的东西。
+const PARITY = process.env.ONLY === 'parity'
+// ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇八页的论文样张和一条空笔记),装好本仓的插件就停住,
+// 不跑任何检查 —— 给人或 computer use 照真实工作流上手体验用。Ctrl-C / 杀掉本进程即收场。建议带 UI_ZOOM=1.1。
+const STAGE = process.env.ONLY === 'stage'
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
+
+/** 摆台用的样张:一篇像样的八页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
+async function makePaper(file) {
+  const fill = [
+    'Readers who annotate tend to remember the structure of an argument better than those who only read, yet the benefit depends heavily on what happens after the first pass.',
+    'In most reading tools a highlight is cheap to make and expensive to find again; the mark stays inside the document, far from the place where the reader later writes.',
+    'We therefore treat every annotation as a small note with an address: a page, a position on that page, the quoted words, and whatever the reader added in their own voice.',
+    'The cost of returning to a passage should be one click from the note that cites it, and the note itself should survive the document being renamed or moved.',
+    'Handwriting behaves differently from typed comments. It is faster for diagrams and arrows, slower for anything that must be searched, and it is rarely revisited unless it sits next to the text it refers to.',
+    'Participants were free to choose their own colours. Several built private schemes within minutes, for example one colour for claims, another for evidence and a third for doubts.',
+  ]
+  const body = (n, from = 0) => Array.from({ length: n }, (_, i) => `<p>${fill[(from + i) % fill.length]} ${fill[(from + i + 2) % fill.length]}</p>`).join('')
+  const sec = (title, n, from) => `<h2>${title}</h2>${body(n, from)}`
+  const html = `<html><body style="font: 14px/1.65 Georgia, serif; margin: 0">
+    <h1 style="font-size: 26px; line-height: 1.25">Marks That Come Back: Annotation, Handwriting and the Second Visit</h1>
+    <p style="color:#555">A. Reader, B. Writer and C. Margin — Department of Reading Studies</p>
+    <h2>Abstract</h2><p><b>Annotation pays off only when the reader returns to it.</b> We compare three ways of marking a document — highlights, typed notes and handwriting — across forty-eight readers and two sessions one week apart. Delayed recall was highest when notes were written in the reader's own words and could be reopened from the place they were cited. Handwriting helped for figures and spatial relations but not for definitions.</p>
+    ${sec('1. Introduction', 4, 0)}${sec('2. Related work', 4, 3)}
+    ${sec('3. Method', 3, 1)}<h3>3.1 Participants</h3><p>Forty-eight readers took part. Each read the same nine-page document twice, one week apart.</p>
+    <h3>3.2 Conditions</h3><table style="border-collapse: collapse; margin: 8px 0" border="1" cellpadding="6"><tr><th>Condition</th><th>Tool</th><th>Readers</th><th>Recall (%)</th></tr><tr><td>Highlight only</td><td>Marker</td><td>16</td><td>41</td></tr><tr><td>Typed notes</td><td>Comment card</td><td>16</td><td>63</td></tr><tr><td>Handwriting</td><td>Pen</td><td>16</td><td>55</td></tr></table>${body(2, 4)}
+    ${sec('4. Results', 5, 2)}${sec('5. Discussion', 5, 5)}${sec('6. Limitations', 2, 1)}
+    <h2>References</h2><ol><li>Margin, C. (2019). The address of a note. <i>Journal of Reading Tools</i>, 12(3), 45–61.</li><li>Writer, B. (2021). Colour schemes that readers invent. <i>Notes &amp; Queries in HCI</i>, 7, 101–118.</li><li>Reader, A. (2023). Why the second visit is expensive. <i>Reading Studies Quarterly</i>, 30(1), 1–19.</li></ol></body></html>`
+  const b = await chromium.launch()
+  try {
+    const p = await b.newPage()
+    await p.setContent(html)
+    fs.writeFileSync(file, await p.pdf({ format: 'A4', margin: { top: '22mm', bottom: '22mm', left: '22mm', right: '22mm' }, outline: true, tagged: true }))
+  } finally { await b.close() }
+}
 
 async function makePdf(file) {
   const para = (s) => `<p>${s} Readers mark up documents all the time, and most of those marks are never looked at again. The point of a reading tool is to make the second visit cheap.</p>`
@@ -49,7 +83,7 @@ async function launch(home, vault, backend) {
   }
   const app = await electron.launch({
     args: [`--user-data-dir=${userData}`, '--lang=zh-CN', DESK], cwd: DESK,
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend, TANGU_HARNESS_QUIET: '1' },
+    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend, ...(STAGE ? null : { TANGU_HARNESS_QUIET: '1' }) }, // 摆台要看得见窗口
   })
   const win = await app.firstWindow()
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1512, 950) })
@@ -93,8 +127,8 @@ async function dragSelect(win, needle, page = 1) {
 
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-pdfreader-'))
-  const vault = path.join(home, 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
-  await makePdf(path.join(vault, FOLDER, PDF))
+  const vault = path.join(home, STAGE ? 'ZZ-验收库' : 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
+  await (STAGE ? makePaper : makePdf)(path.join(vault, FOLDER, PDF))
   // 第一条:把 PDF 拖进笔记得到的不带页码的链接(⑭);后两条:「复制引用」贴出来的带页码的链接、聊天引用那种带引语的(⑮)。
   fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n\n[[${PDF}#page=3|第 3 页]]\n\n[[${PDF}#page=2&q=nine-page%20document|引语]]\n`)
   // PLUGIN_DIR / PLUGIN_SRC:照商店的装法放(目录叫安装名 better-pdf、整个仓原样解进去),缺省是只放 main.js + 清单、目录叫插件 id。
@@ -111,10 +145,17 @@ async function main() {
   let { app, win } = await launch(home, vault, stub.url)
   win.on('pageerror', (e) => errors.push(String(e)))
   win.on('console', (m) => { if (m.type() === 'error' && /pdf-reader|pdfjs|Worker/i.test(m.text())) errors.push(m.text()) })
+  if (STAGE) {
+    fs.writeFileSync(path.join(vault, '读后记.md'), '# 读后记\n\n')
+    console.log(`摆好了。库:${vault}\n旁挂批注文件:${sidecar}\n页面错误会接着打在下面;收场:结束本进程。`)
+    win.on('pageerror', (e) => console.log(`[pageerror] ${e}`)); win.on('console', (m) => { if (m.type() === 'error') console.log(`[console.error] ${m.text()}`) })
+    await new Promise((r) => { app.on('close', r); process.on('SIGINT', r); process.on('SIGTERM', r) })
+    await app.close().catch(() => {}); await stub.close?.(); return
+  }
   try {
     // ONLY=links:只走最后的链接几项(⑭ ⑮),改路由 / 落点时用,一分钟内跑完(两段主流程各跳过一次)。
     full: {
-    if (LINKS) break full
+    if (LINKS || PARITY) break full
     // ① 接管:是我们的阅读器,不是内置的
     check('① 点开 PDF 由插件打开', await win.locator('.pr-root .pdfViewer .page').count() === 3 && await win.locator('.amx-pdfview').count() === 0)
     check('① 刚装好没有任何批注', readSidecar() === null && await win.locator('.pr-marks > *').count() === 0)
@@ -505,7 +546,7 @@ async function main() {
   ;({ app, win } = await launch(home, vault, stub.url))
   try {
     full: {
-    if (LINKS) break full
+    if (LINKS || PARITY) break full
     await win.waitForSelector('.pr-hl', { timeout: 15_000 }).catch(() => {})
     const n = { hl: await win.locator('.pr-hl').count(), ul: await win.locator('.pr-ul').count(), note: await win.locator('.pr-note').count(), items: await win.locator('.pr-item').count() }
     check('⑩ 关掉重开,批注都还在', n.hl >= 1 && n.ul >= 1 && n.note === 1 && n.items >= (hasInk ? 4 : 3), JSON.stringify(n))
@@ -518,6 +559,128 @@ async function main() {
     await win.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'dark'; r.classList.add('dark') }); await win.waitForTimeout(500)
     await win.mouse.click(600, 232); await win.waitForTimeout(400) // 点开那条高亮的批注卡,暗色下一起看
     await win.screenshot({ path: path.join(SHOTS, '7-dark.png') })
+    } // full
+
+    // ⑯ 白板的用法:工具的字母键(E 橡皮再按回到上一个工具)、任意颜色、笔尾的橡皮、手写笔模式下手指连点两下。
+    //    白板层的工具由插件定死,引擎自己的这几样因此都不生效(笔尾橡皮按下去会拿当前的笔照画),得插件来接。
+    parity: {
+    if (LINKS) break parity
+    const inkOn = await win.locator('.pr-toolbar [data-act="tool"][data-v="ink"]').count() === 1
+    const tool = () => win.evaluate(() => document.querySelector('.pr-root').dataset.tool)
+    const press = async (k) => { await win.keyboard.press(k); await win.waitForTimeout(150); return tool() }
+    const annN = () => (readSidecar()?.annots ?? []).length
+    const inkN = () => Object.values(readSidecar()?.ink ?? {}).reduce((n, l) => n + l.length, 0)
+    await win.evaluate(() => { const r = document.documentElement; delete r.dataset.mode; r.classList.remove('dark') })
+    await win.keyboard.press('Escape'); await win.waitForTimeout(200)
+    let pg = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
+    await win.mouse.click(pg.x + 20, pg.y + pg.height * 0.3); await win.waitForTimeout(300) // 点一下页边:键盘焦点进阅读器
+    // ⑯a 字母键
+    const seq = []; for (const k of ['h', 'u', 'n', 't', 'v']) seq.push(await press(k))
+    check('⑯a 字母键换工具:H 高亮、U 下划线、N 便签、T 文字、V 选择', seq.join() === 'highlight,underline,note,text,select', seq.join())
+    const tip = await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').evaluate((b) => [b.title, b.getAttribute('aria-label'), b.getAttribute('aria-keyshortcuts')])
+    check('⑯a 按钮提示上写着键,读屏念的仍是名字', tip[0] === '高亮 (H)' && tip[1] === '高亮' && tip[2] === 'H', JSON.stringify(tip))
+    if (inkOn) {
+      const s2 = []; for (const k of ['p', 'e', 'e', 'x', 'r']) s2.push(await press(k))
+      const rect = await win.locator('.pr-toolbar [data-act="shape"][data-v="rectangle"].on').count()
+      s2.push(await press('o')); const ell = await win.locator('.pr-toolbar [data-act="shape"][data-v="ellipse"].on').count()
+      for (const k of ['e', 'e', '8', '8', 'Shift+E', 'r', '1']) s2.push(await press(k))
+      check('⑯a P / X 手写,E 橡皮、再按 E 回到上一个工具(不是回到选择),R O 形状,数字键按工具栏顺序,Shift+E 不算', s2.join() === 'ink,eraser,ink,ink,shape,shape,eraser,shape,eraser,shape,shape,shape,select' && rect === 1 && ell === 1, JSON.stringify({ s2: s2.join(), rect, ell }))
+    }
+    await win.keyboard.press('ControlOrMeta+f'); await win.waitForTimeout(250); await win.keyboard.type('pe'); await win.waitForTimeout(250)
+    const typed = await win.locator('.pr-findbar input').inputValue(), tAfter = await tool()
+    await win.keyboard.press('Escape'); await win.waitForTimeout(250)
+    check('⑯a 在输入框里打字不换工具', typed === 'pe' && tAfter === 'select', JSON.stringify({ typed, tAfter }))
+
+    // ⑯b 任意颜色:选区浮条、批注卡、工具栏各有一颗取色器;挑过的留在色点后面
+    const C1 = '#123456', C2 = '#abcdef', C3 = '#0a7f5c', SENT = 'most of those marks are never looked at again.'
+    const a0 = annN()
+    const sb = await dragSelect(win, SENT)
+    await win.locator('.pr-selpop input[type="color"]').fill(C1); await until(() => annN() === a0 + 1, 4000)
+    const made = (readSidecar()?.annots ?? []).find((a) => a.color === C1)
+    check('⑯b 选区浮条上用取色器挑一种:高亮就是这个颜色', annN() === a0 + 1 && made?.type === 'highlight', JSON.stringify({ n: [a0, annN()], made: made && { type: made.type, color: made.color } }))
+    await win.waitForTimeout(500); await win.mouse.click((sb.left + sb.right) / 2, sb.y0); await win.waitForSelector('.pr-card', { timeout: 4000 }).catch(() => {})
+    const cardDot = await win.locator(`.pr-card .pr-dot.on[data-v="${C1}"]`).count()
+    await win.locator('.pr-card input[type="color"]').fill(C2); await until(() => (readSidecar()?.annots ?? []).some((a) => a.id === made?.id && a.color === C2), 4000)
+    check('⑯b 批注卡上认得这种颜色,再用取色器换一种:这条批注跟着换', cardDot === 1 && (readSidecar()?.annots ?? []).some((a) => a.id === made?.id && a.color === C2) && await win.locator(`.pr-card .pr-dot.on[data-v="${C2}"]`).count() === 1, JSON.stringify({ cardDot }))
+    await win.screenshot({ path: path.join(SHOTS, '12-custom-colour-card.png') })
+    await win.keyboard.press('Escape'); await win.waitForTimeout(250)
+    await win.locator('.pr-toolbar input[type="color"][data-color="color"]').fill(C3); await win.waitForTimeout(250)
+    const bar = await win.evaluate(() => ({ on: document.querySelector('.pr-toolbar .pr-dot.on')?.dataset.v, dots: [...document.querySelectorAll('.pr-toolbar .pr-dot[data-v]')].map((d) => d.dataset.v), rows: Math.round(document.querySelector('.pr-toolbar').getBoundingClientRect().height / document.querySelector('.pr-toolbar .pr-tool').getBoundingClientRect().height), kept: localStorage.getItem('forsion-pdf-reader.colors') }))
+    check('⑯b 工具栏上挑的成了当前颜色;最近挑过的三种排在固定色点后面,记得住;工具栏仍是一行', bar.on === C3 && bar.dots.slice(-3).join() === [C3, C2, C1].join() && bar.dots.length === 8 && bar.rows === 1 && bar.kept === JSON.stringify([C3, C2, C1]), JSON.stringify(bar))
+    await win.locator('.pr-toolbar .pr-dot[data-act="color"]').first().click(); await win.waitForTimeout(150)
+    // 点过工具栏之后按键还得有人听(工具栏整条重画,被点的那颗按钮带着键盘焦点一起没了)
+    await win.locator('.pr-toolbar [data-act="tool"][data-v="underline"]').click(); await win.waitForTimeout(150)
+    const afterClick = [await press('h'), await win.evaluate(() => !!document.activeElement?.closest('.pr-root'))]
+    check('⑯a 点过工具栏上的按钮之后,快捷键照样管用(焦点没有掉出阅读器)', afterClick[0] === 'highlight' && afterClick[1] === true, JSON.stringify(afterClick))
+    await press('v')
+
+    if (inkOn) {
+      // 笔尾橡皮、手指连点:页面右下的空白处先用鼠标画一道横线(手写的取色器顺带挑一种颜色),再拿「笔尾」竖着扫过去
+      await press('p'); await win.waitForSelector('.pr-board canvas', { timeout: 20_000 }); await win.waitForTimeout(1200)
+      await win.locator('.pr-toolbar input[type="color"][data-color="ink-color"]').fill('#ff00aa'); await win.waitForTimeout(250)
+      const inkRows = await win.evaluate(() => Math.round(document.querySelector('.pr-toolbar').getBoundingClientRect().height / document.querySelector('.pr-toolbar .pr-tool').getBoundingClientRect().height))
+      await win.screenshot({ path: path.join(SHOTS, '13-custom-colour-ink.png') })
+      pg = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
+      const lx = pg.x + pg.width * 0.6, ly = pg.y + pg.height * 0.59, k0 = inkN()
+      await win.mouse.move(lx, ly); await win.mouse.down(); for (let i = 1; i <= 10; i++) await win.mouse.move(lx + i * 12, ly); await win.mouse.up()
+      await until(() => inkN() === k0 + 1, 5000)
+      const drawn = Object.values(readSidecar()?.ink ?? {}).flat().find((e) => e.strokeColor === '#ff00aa')
+      check('⑯b 手写的取色器:画出来就是挑的那种颜色', inkN() === k0 + 1 && drawn?.type === 'freedraw', JSON.stringify({ n: [k0, inkN()], drawn: drawn && drawn.type }))
+      const pal = await win.evaluate(() => { const r = (q) => document.querySelector(q).getBoundingClientRect(), a = r('.pr-palette'), v = r('.pr-viewport'); return { rows: inkRowsOf(), inside: a.top >= v.top && a.left >= v.left - 1 && a.right <= v.right + 1, h: Math.round(a.height) }; function inkRowsOf() { return Math.round(r('.pr-toolbar').height / r('.pr-toolbar .pr-tool').height) } })
+      check('⑯e 手写那一排浮在页面上方:工具栏仍是一行(换工具时页面不跳),面板没伸出阅读区', inkRows === 1 && pal.rows === 1 && pal.inside, JSON.stringify({ inkRows, ...pal }))
+      // 刚画完,键盘焦点在白板上:查找和 Esc 不能被引擎吃掉(它把 ⌘F 当成自己的「搜索画布」,在这里没有界面)
+      const where = await win.evaluate(() => !!document.activeElement?.closest('.pr-board'))
+      await win.keyboard.press('ControlOrMeta+f'); await win.waitForTimeout(300)
+      const findOpen = await win.evaluate(() => !document.querySelector('.pr-findbar').hidden && !!document.activeElement?.closest('.pr-findbar'))
+      await win.keyboard.press('Escape'); await win.waitForTimeout(250)
+      await win.mouse.move(lx, ly + 40); await win.mouse.down(); await win.mouse.move(lx + 30, ly + 40, { steps: 3 }); await win.mouse.up(); await until(() => inkN() === k0 + 2, 5000)
+      const escTool = await press('Escape')
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => inkN() === k0 + 1, 5000)
+      check('⑯a 焦点在白板上时:⌘/Ctrl+F 照样打开查找条,Esc 照样回到选择工具', where && findOpen && escTool === 'select' && inkN() === k0 + 1, JSON.stringify({ where, findOpen, escTool, ink: [k0, inkN()] }))
+      await press('p'); await win.waitForTimeout(500)
+      // 合成的笔事件(CDP 发不出 5 号键):按下 → 等一拍 → 扫过去 → 抬起。指针号用鼠标那个(它一直在场,引擎抓指针时不会报错)。
+      const tail = (pts) => win.evaluate(async (pts) => {
+        const fire = (type, [x, y], button, buttons) => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'pen', isPrimary: true, button, buttons, pressure: buttons ? 0.5 : 0 }))
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+        fire('pointerdown', pts[0], 5, 32); await wait(150)
+        const root = document.querySelector('.pr-root'), lit = () => !!document.querySelector('.pr-toolbar [data-v="eraser"]') && getComputedStyle(document.querySelector('.pr-toolbar [data-v="eraser"]')).borderTopColor !== 'rgba(0, 0, 0, 0)'
+        const during = [root.dataset.tool, 'tail' in root.dataset, lit()].join()
+        for (const p of pts.slice(1)) { fire('pointermove', p, -1, 32); await wait(20) }
+        fire('pointerup', pts[pts.length - 1], 5, 0); await wait(500)
+        return { during, after: [root.dataset.tool, 'tail' in root.dataset, lit()].join() }
+      }, pts)
+      const down = (x, y0, y1) => Array.from({ length: 9 }, (_, i) => [x, y0 + ((y1 - y0) * i) / 8])
+      const k1 = inkN()
+      const t1 = await tail(down(lx + 60, ly - 22, ly + 22)); await until(() => inkN() === k1 - 1, 5000)
+      check('⑯c 手写时用笔尾扫过那道线:线被擦掉,没有多画出一笔;按着的时候工具栏上橡皮亮着,手上的工具不换(工具栏不重排)', t1.during === 'ink,true,true' && t1.after === 'ink,false,false' && inkN() === k1 - 1, JSON.stringify({ ...t1, ink: [k1, inkN()] }))
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => inkN() === k1, 5000); const u1 = inkN()
+      await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => inkN() === k1 - 1, 5000); const r1 = inkN()
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => inkN() === k1, 5000)
+      const back = Object.values(readSidecar()?.ink ?? {}).flat().find((e) => e.strokeColor === '#ff00aa')
+      check('⑯c 撤销:擦掉的那道线回来(还在原来的位置);重做:又擦掉;再撤销:又回来', u1 === k1 && r1 === k1 - 1 && inkN() === k1 && !!back && Math.abs(back.x - drawn.x) < 0.01 && Math.abs(back.y - drawn.y) < 0.01, JSON.stringify({ u1, r1, now: inkN(), at: back && [back.x, back.y], was: [drawn.x, drawn.y] }))
+      // 高亮工具下(白板层这时不收指针,按下去落在页面上)用笔尾扫过刚才那条高亮:批注也擦得掉,抬起回到高亮
+      await press('h'); await win.waitForTimeout(400)
+      const hb = await sentenceBox(win, SENT), a1 = annN()
+      const t2 = await tail(down((hb.left + hb.right) / 2, hb.top - 14, hb.bottom + 14)); await until(() => annN() === a1 - 1, 5000)
+      const sel2 = await win.evaluate(() => window.getSelection().isCollapsed)
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => annN() === a1, 5000); const a2 = annN()
+      await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => annN() === a1 - 1, 5000)
+      check('⑯c 高亮工具下用笔尾扫过一条高亮:擦掉了,工具还是高亮,没有顺手选中文字;撤销回来,重做又没', t2.during === 'highlight,true,true' && t2.after === 'highlight,false,false' && sel2 && a2 === a1 && annN() === a1 - 1, JSON.stringify({ ...t2, sel2, annots: [a1, a2, annN()] }))
+      const penOn = await win.locator('.pr-toolbar [data-act="penmode"].on').count()
+      // ⑯d 手写笔模式开着(刚才那支「笔」打开的):手写时手指连点两下 = 橡皮,再连点两下 = 回到手写;慢慢点两下不算
+      await press('p'); await win.waitForTimeout(600)
+      const cdp = await win.context().newCDPSession(win)
+      const tap = async (x, y) => { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] }); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }) }
+      const twice = async (gap) => { await tap(lx + 30, ly + 60); await win.waitForTimeout(gap); await tap(lx + 30, ly + 60); await win.waitForTimeout(300); return tool() }
+      const k2 = inkN(), d1 = await twice(60), d2 = await twice(60), d3 = await twice(600)
+      check('⑯d 手写笔模式下手指连点两下:橡皮和手写来回换;慢点两下不换;都不留笔迹', penOn === 1 && d1 === 'eraser' && d2 === 'ink' && d3 === 'ink' && inkN() === k2, JSON.stringify({ penOn, d1, d2, d3, ink: [k2, inkN()] }))
+      await win.locator('.pr-toolbar [data-act="penmode"]').click(); await win.waitForTimeout(1500)
+    }
+    await press('v'); await win.evaluate(() => window.getSelection().removeAllRanges())
+    } // parity
+
+    full: {
+    if (LINKS || PARITY) break full
     // ⑬ 把标签移到新窗口:那个窗口没有右栏。PDF 得照样在 —— 插件第一次挂上时会去开批注面板,
     //    没有右栏的窗口里宿主把它开进主区、就地顶掉 PDF 这个标签(用户看到的是「移过去是空的,点退回才回来」)。
     await win.keyboard.press('Escape'); await win.waitForTimeout(200)
@@ -529,6 +692,8 @@ async function main() {
     check('⑬ 标签移到新窗口后 PDF 还在(没被批注面板顶掉);那边没有右栏,工具栏上不放「面板」按钮', shown && st.reader && st.hl >= 1 && st.panelBtn === 0 && st.kind === 'detached', JSON.stringify({ shown, ...st }))
     await w2.screenshot({ path: path.join(SHOTS, '8-new-window.png') }).catch(() => {})
     } // full
+    links: {
+    if (PARITY) break links
     // ⑭ 在笔记里点 [[x.pdf]](不带页码):也该由插件打开。用户把 PDF 拖进笔记、再点那条链接,走的就是这条路;
     //    桌面 2.13.2 及更早把笔记里的 PDF 链接直接交给内置阅读器、不问「默认打开方式」—— 在那些版本上这一项是红的。
     await win.bringToFront().catch(() => {})
@@ -577,6 +742,7 @@ async function main() {
     const c15 = await clickNoteLink('第 3 页', (f) => f?.page === '3')
     check('⑮c 没开着时点带页码的链接:插件打开并落在第 3 页', !!closed && c15?.page === '3' && c15.mark === '' && !c15.builtin, JSON.stringify({ closed: !!closed, ...c15 }))
     await win.screenshot({ path: path.join(SHOTS, '11-page-link-cold.png') })
+    } // links
   } finally { await app.close() }
 
   await stub.close?.()

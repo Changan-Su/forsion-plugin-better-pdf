@@ -51,6 +51,7 @@ await t('装好是空的:仓里不带 PDF、不带批注文件', () => {
 })
 await t('样式不外溢:每条规则都落在 .pr- 下,不写 ::-webkit-scrollbar', () => {
   A.ok(!css.includes('::-webkit-scrollbar'))
+  A.ok(!/dashed/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), '界面里不画虚线边框(宿主 DESIGN §6)')
   const selectors = css.replace(/\/\*[\s\S]*?\*\//g, '').split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)
   // 先把 :is(…) 之类括号里的逗号拿掉,再按逗号拆成单条选择器
   const loose = selectors.flatMap((s) => s.replace(/\([^()]*\)/g, '()').split(',')).map((s) => s.trim()).filter((s) => s && !s.includes('.pr-'))

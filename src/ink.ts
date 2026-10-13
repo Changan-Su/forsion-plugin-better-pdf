@@ -300,6 +300,21 @@ export class InkLayer {
     // 只让出外框那一圈(边线、缩放柄都在这上面)。框里面照旧按底下的东西判:圈住一段话的方框选中着,里面的字还得能选。
     return sx >= x0 - pad && sx <= x1 + pad && sy >= y0 - pad && sy <= y1 + pad && !(sx > x0 + pad && sx < x1 - pad && sy > y0 + pad && sy < y1 - pad)
   }
+  // ── 笔尾橡皮:不经引擎(工具由我们定死时它不认笔尾那颗键),直接改白板上的元素 ──
+  /** 把这一点上的笔迹 / 形状拿掉,返回拿掉的那些(连续画布上的坐标,撤销时原样放回)。 */
+  eraseAt(x: number, y: number): any[] {
+    if (!this.handle) return []
+    const [sx, sy, u] = this.toScene(x, y), els = this.handle.getScene().elements
+    const gone = els.filter((e) => hits(e, sx, sy, HIT * u))
+    if (gone.length) this.replace(els.filter((e) => !gone.includes(e)))
+    return gone
+  }
+  /** 撤销:放回去。ponytail: 放回的排在最上面(原来压在别的笔迹下面的会翻到上面);要原样的层次得记下它原来的位置。 */
+  putBack(els: any[]): void { if (this.handle) this.replace([...this.handle.getScene().elements, ...els]) }
+  /** 重做:再拿掉。 */
+  drop(els: any[]): void { const ids = new Set(els.map((e) => e.id)); if (this.handle) this.replace(this.handle.getScene().elements.filter((e) => !ids.has(e.id))) }
+  private replace(elements: any[]): void { this.handle!.update({ scene: { elements } }); this.dirty = true; this.commit() }
+
   /** 指针按在了页面那一边:让引擎放下它选中的东西。接口上没有「取消选中」,借引擎自己的规矩 —— 切到别的工具会清掉选中,再切回来。 */
   unpick(): void {
     this.picked.clear()

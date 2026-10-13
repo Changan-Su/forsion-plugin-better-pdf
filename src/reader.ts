@@ -16,8 +16,26 @@ const TOOLS: [Tool, string][] = [
 ]
 /** 归白板层的三个工具:宿主没有白板层接口时不出现。 */
 const BOARD_TOOLS: Tool[] = ['shape', 'ink', 'eraser']
+/** 工具的字母键,照宿主白板的来(V 选择、P / X 笔、E 橡皮、R O A L 四种形状、T 文字);高亮、下划线、便签是我们自己的,另取 H U N。
+ *  白板层的工具由我们定死,引擎因此不认它自己的快捷键,得我们来接。数字键另算:按工具栏上的顺序,0 也是橡皮。 */
+const KEY_TOOL: Record<string, [Tool, HostBoardShape?]> = {
+  v: ['select'], h: ['highlight'], u: ['underline'], n: ['note'], t: ['text'], p: ['ink'], x: ['ink'], e: ['eraser'], 0: ['eraser'],
+  r: ['shape', 'rectangle'], o: ['shape', 'ellipse'], a: ['shape', 'arrow'], l: ['shape', 'line'],
+}
+/** 写在按钮提示上的那个键。 */
+export const TOOL_KEY: Record<string, string> = { select: 'V', highlight: 'H', underline: 'U', note: 'N', text: 'T', shape: 'R', ink: 'P', eraser: 'E', rectangle: 'R', ellipse: 'O', arrow: 'A', line: 'L' }
+
+/** 调色盘之外、自己用取色器挑过的颜色:留最近三种,批注和手写共用。 */
+const HEX = /^#[0-9a-f]{6}$/
+const RECENT_KEY = 'forsion-pdf-reader.colors'
+let recent: string[] = []
+try { recent = (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown[]).filter((c): c is string => typeof c === 'string' && HEX.test(c)).slice(0, 3) } catch { /* 读不出来就当没挑过 */ }
+function remember(c: string): void {
+  recent = [c, ...recent.filter((x) => x !== c)].slice(0, 3)
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)) } catch { /* 存不上:只记这一程 */ }
+}
 /** 一次手势(按下到抬起,或一次按键)留下的东西:删掉了哪些批注、白板那边变没变。撤销 / 重做按它走。 */
-interface Step { annots: Annot[]; board: boolean }
+interface Step { annots: Annot[]; board: boolean; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
 export const KIND_ICON: Record<AnnotType | 'ink', string> = {
   highlight: 'highlighter', underline: 'underline', strike: 'strikethrough', note: 'sticky-note', text: 'type', area: 'square-dashed', ink: 'pen-line',
 }
@@ -100,11 +118,14 @@ export class Reader {
   private log: Step[] = []
   private redoLog: Step[] = []
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
-  private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; hit: string | null; shift: boolean; erased: Set<string> } | null = null
+  private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; hit: string | null; shift: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
   /** 落在白板层上、被我们拿来滚页面的那根手指(far = 离落点最远到过多远:没怎么动就是一次轻点)。 */
   private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number } | null = null
   /** 笔尖正按在页面上(这时落下来的多半是手掌,不拿它滚页面)。 */
   private penDown = false
+  /** 换到橡皮之前手上的工具(E 键、手指连点两下再回去用)。 */
+  private beforeEraser: Tool = 'select'
+  private lastTap = 0
   private color = COLORS[0]
   private dead = false
   private readonly subs = new Set<() => void>()
@@ -254,6 +275,13 @@ export class Reader {
     on(window, 'pointercancel', (ev: PointerEvent) => this.onPressUp(ev), { capture: true })
     on(document, 'selectionchange', () => this.onSelChange())
     on(this.root, 'click', (ev: MouseEvent) => this.onAct(ev))
+    on(this.root, 'change', (ev: Event) => {
+      const i = ev.target as HTMLInputElement
+      if (!i.matches?.('input[type="color"][data-color]')) return
+      const c = i.value.toLowerCase()
+      remember(c)
+      if (i.dataset.color === 'ink-color') { this.ink?.setColor(c); this.renderToolbar() } else this.pickColor(c, i)
+    })
 
     const ro = new ResizeObserver(() => {
       this.sized = container.clientHeight > 0
@@ -279,7 +307,6 @@ export class Reader {
   }
 
   private onKey(ev: KeyboardEvent): void {
-    if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); ev.stopPropagation(); this.toggleFind(true); return }
     if (ev.key !== 'Escape') return
     if (this.pop) this.closePop()
     else if (!this.q('.pr-findbar').hidden) this.toggleFind(false)
@@ -322,28 +349,44 @@ export class Reader {
 
   // ── 工具栏 ──────────────────────────────────────────────────────────────────────
   renderToolbar(): void {
-    const btn = (act: string, ic: string, title: string, on = false, v = ''): string =>
-      `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}" aria-label="${esc(title)}"${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
+    // 提示上带快捷键(工具、形状才有);读屏念名字,键另写在 aria-keyshortcuts 上。
+    const btn = (act: string, ic: string, title: string, on = false, v = ''): string => {
+      const key = act === 'tool' || act === 'shape' ? TOOL_KEY[v] : ''
+      return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
+    }
     const sep = '<span class="pr-sep"></span>'
-    const tools = TOOLS.filter(([k]) => this.ink || !BOARD_TOOLS.includes(k))
-      .map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k, k)).join('')
+    const tools = this.tools().map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k, k)).join('')
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
     const mid = inking ? this.ink!.toolbarHtml(btn, sep) : this.dotsHtml(this.color, 'color')
-    // 三组各自不拆行;窗口窄到一行放不下时(手写那一排最长),右边那组整组折到第二行、仍然靠右。
-    this.q('.pr-toolbar').innerHTML =
+    // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
+    // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
+    const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
+    // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
+    bar.innerHTML =
       `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
-      `<span class="pr-group">${sep}${mid}</span>` +
+      `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
+    if (had) (bar.querySelector<HTMLElement>(`[data-act="${f!.dataset.act}"][data-v="${f!.dataset.v ?? ''}"]`) ?? this.container).focus({ preventScroll: true })
   }
 
+  /** 一排色点:固定的几种,后面跟着自己挑过的(最近三种;这条批注正用着的不在里面也补上),最后一颗是取色器,什么颜色都行。 */
   dotsHtml(current: string | null, act: string, colors = COLORS): string {
-    return `<span class="pr-dots" role="group" aria-label="${esc(t('tool.color'))}">${colors.map((c) =>
-      `<button class="pr-dot${c === current ? ' on' : ''}" data-act="${act}" data-v="${c}" style="--c:${c}" title="${c}" aria-label="${c}"></button>`).join('')}</span>`
+    const own = [...new Set([...(current && HEX.test(current) ? [current] : []), ...recent])].filter((c) => !colors.includes(c)).slice(0, 3)
+    const custom = esc(t('tool.customColor'))
+    return `<span class="pr-dots" role="group" aria-label="${esc(t('tool.color'))}">${[...colors, ...own].map((c) =>
+      `<button class="pr-dot${c === current ? ' on' : ''}" data-act="${act}" data-v="${c}" style="--c:${c}" title="${c}" aria-label="${c}"></button>`).join('')}` +
+      `<label class="pr-dot pr-custom" title="${custom}"><input type="color" data-color="${act}" value="${own[0] ?? colors[0]}" aria-label="${custom}"></label></span>`
   }
+
+  private tools(): [Tool, string][] { return TOOLS.filter(([k]) => this.ink || !BOARD_TOOLS.includes(k)) }
+
+  /** 橡皮和上一个工具来回换(E 键、手写笔模式下手指连点两下):白板的规矩。 */
+  private toggleEraser(): void { this.setTool(this.tool === 'eraser' ? this.beforeEraser : 'eraser') }
 
   private setTool(tool: Tool): void {
     if (this.tool === tool && tool !== 'select') tool = 'select' // 再点一次当前工具 = 回到选择
+    if (tool === 'eraser' && this.tool !== 'eraser') this.beforeEraser = this.tool
     this.tool = tool
     this.root.dataset.tool = tool
     this.closePop()
@@ -361,7 +404,7 @@ export class Reader {
     if (kind === 'card') {
       if (!this.selected) return
       this.doc?.patch(this.selected, { color: c })
-      this.pop!.querySelectorAll<HTMLElement>('.pr-dot').forEach((d) => d.classList.toggle('on', d.dataset.v === c))
+      this.pop!.querySelector('.pr-dots')!.outerHTML = this.dotsHtml(c, 'color') // 重画这一排:刚用取色器挑的那种原来不在里面
       return
     }
     this.color = c
@@ -446,11 +489,18 @@ export class Reader {
       this.finger ??= { id: ev.pointerId, x: ev.clientX, y: ev.clientY, x0: ev.clientX, y0: ev.clientY, far: 0 }
       return
     }
-    if (ev.button !== 0 || inPop(ev) || !this.doc || this.press) return
+    // 笔尾的橡皮(指针事件里是 5 号键):按着的这一下当橡皮用,手上的工具不换 —— 白板的规矩。
+    // 白板层的工具由我们定死,引擎因此不接这颗键(它会拿当前的笔照画)。所以这一下不给引擎看,批注和画上去的东西都由我们自己擦。
+    // 已经是橡皮工具时照常交给引擎。
+    const tailEnd = ev.pointerType === 'pen' && ev.button === 5
+    if ((ev.button !== 0 && !tailEnd) || inPop(ev) || !this.doc || this.press) return
+    const tail = tailEnd && this.tool !== 'eraser' && (onBoard || this.container.contains(ev.target as Node))
+    if (tail) { ev.stopPropagation(); ev.preventDefault() } // preventDefault:落在字上时别开始选字
     this.ink?.take() // 上一手之后才冒出来的变化(引擎给一笔收尾)归上一手,不算进这一手
     const x = ev.clientX, y = ev.clientY
-    this.press = { id: ev.pointerId, x, y, lx: x, ly: y, onBoard, hit: onBoard && this.tool === 'select' ? this.ink!.hitAt(x, y) : null, shift: ev.shiftKey, erased: new Set() }
-    if (this.tool === 'select') {
+    this.press = { id: ev.pointerId, x, y, lx: x, ly: y, onBoard, hit: onBoard && !tail && this.tool === 'select' ? this.ink!.hitAt(x, y) : null, shift: ev.shiftKey, erased: new Set(), tail, inkGone: [] }
+    if (tail) { this.root.dataset.tail = ''; this.closePop(); this.eraseAlong(x, y) }
+    else if (this.tool === 'select') {
       if (!onBoard) this.ink?.unpick()
       else { this.closePop(); if (!ev.shiftKey) this.selectMany([]) }
     } else if (this.tool === 'eraser' && onBoard) this.eraseAlong(x, y) // 只有按在白板层上才是在擦:底栏的按钮也在这块区域里,点它不能擦到它身后的批注
@@ -468,7 +518,8 @@ export class Reader {
       return
     }
     const p = this.press
-    if (p) { if (p.onBoard && this.tool === 'eraser' && ev.pointerId === p.id && ev.buttons) this.eraseAlong(ev.clientX, ev.clientY) }
+    if (p?.tail && ev.pointerId === p.id) { ev.stopPropagation(); if (ev.buttons) this.eraseAlong(ev.clientX, ev.clientY) }
+    else if (p) { if (p.onBoard && this.tool === 'eraser' && ev.pointerId === p.id && ev.buttons) this.eraseAlong(ev.clientX, ev.clientY) }
     else if (!ev.buttons && ev.pointerType !== 'touch') this.ink?.hover(ev.clientX, ev.clientY)
   }
 
@@ -479,6 +530,11 @@ export class Reader {
       ev.stopPropagation()
       if (ev.pointerId !== f.id) return
       this.finger = null
+      // 手写笔模式下手指连点两下:橡皮和刚才的工具来回换(白板的规矩;选字、划线这些时候不换)。
+      if (penMode && ev.type === 'pointerup' && f.far < 8 && BOARD_TOOLS.includes(this.tool)) {
+        if (ev.timeStamp - this.lastTap < 300) { this.lastTap = 0; this.toggleEraser(); return }
+        this.lastTap = ev.timeStamp
+      }
       // 没怎么动:是一次轻点。点的是页面上的东西(链接、批注)就替它点下去。
       const under = ev.type === 'pointerup' && f.far < 8 ? document.elementsFromPoint(f.x0, f.y0).find((e) => !this.ink!.owns(e)) : null
       if (under && this.container.contains(under)) under.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: f.x0, clientY: f.y0 }))
@@ -487,10 +543,16 @@ export class Reader {
     const p = this.press
     if (!p || ev.pointerId !== p.id || this.dead) return
     this.press = null
-    if (ev.type === 'pointercancel') { this.repaint(); return } // 系统收走了这一下:不算数
+    if (p.tail) { delete this.root.dataset.tail; ev.stopPropagation() }
+    if (ev.type === 'pointercancel' && !p.inkGone.length) { this.repaint(); return } // 系统收走了这一下:不算数(笔尾已经擦掉的笔迹照样记账,好撤销)
     const moved = Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4, tool = this.tool
     let gone: Annot[] = []
-    if (tool === 'eraser' && p.erased.size) gone = this.doc?.removeMany([...p.erased]) ?? []
+    if ((tool === 'eraser' || p.tail) && p.erased.size) gone = this.doc?.removeMany([...p.erased]) ?? []
+    if (p.tail) {
+      this.ink?.take() // 这一手是我们自己擦的,不记成「引擎那边动过」(那样撤销会叫引擎多退一步)
+      if (gone.length || p.inkGone.length) { this.log.push({ annots: gone, board: false, ink: p.inkGone }); this.redoLog.length = 0 }
+      return
+    }
     if (tool === 'select' && p.onBoard && this.ink) {
       if (p.hit) this.ink.pick([p.hit], p.shift)
       else if (moved) {
@@ -520,6 +582,7 @@ export class Reader {
         p.erased.add(m.dataset.a!)
         layer!.querySelectorAll(`[data-a="${m.dataset.a}"]`).forEach((e) => e.classList.add('erasing'))
       }
+      if (p.tail) p.inkGone.push(...(this.ink?.eraseAt(px, py) ?? []))
     }
     p.lx = x; p.ly = y
   }
@@ -546,6 +609,7 @@ export class Reader {
   undo(): void {
     const s = this.log.pop()
     if (s?.annots.length) this.doc?.restore(s.annots)
+    if (s?.ink?.length) this.ink?.putBack(s.ink)
     if (!s || s.board) this.ink?.undo()
     if (s) this.redoLog.push(s)
   }
@@ -553,24 +617,40 @@ export class Reader {
     const s = this.redoLog.pop()
     // 记下删掉时的样子:撤销之后用户可能又改过评论 / 标签,下次撤销放回的得是改过的这一份。
     if (s?.annots.length) { for (const a of s.annots) this.sel.delete(a.id); s.annots = this.doc?.removeMany(s.annots.map((a) => a.id)) ?? [] }
+    if (s?.ink?.length) this.ink?.drop(s.ink)
     if (!s || s.board) this.ink?.redo()
     if (s) this.log.push(s)
   }
 
   /** 把白板层卸掉重挂。引擎的撤销栈跟着没了,账上「白板那一步」作废(删掉的批注照样能撤销回来)。 */
   remountBoard(): void {
-    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length).map((s) => ({ annots: s.annots, board: false }))
+    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink }))
     this.log = keep(this.log); this.redoLog = keep(this.redoLog)
     this.ink?.remount()
   }
 
   private onKeyFirst(ev: KeyboardEvent): void {
-    if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
     const k = ev.key.toLowerCase()
+    // 查找也得赶在引擎前面:焦点在白板上时(刚画过、刚点过空白)它把 ⌘/Ctrl+F 当成自己的「搜索画布」吃掉,而它在这里没有界面。
+    if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && k === 'f') { ev.preventDefault(); ev.stopPropagation(); this.toggleFind(true); return }
+    // Esc 也一样:焦点在白板上时引擎自己收下、不往上冒。我们有事可做(收浮层、关查找、回到选择工具)就先做并拦下;没事可做再给它(放下它选中的东西)。
+    if (ev.key === 'Escape' && this.ink?.owns(ev.target)) { this.onKey(ev); return }
+    if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
     if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
       ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
       return
+    }
+    if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat) {
+      const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools()[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
+      if (tool && (this.ink || !BOARD_TOOLS.includes(tool))) {
+        ev.preventDefault(); ev.stopPropagation()
+        if (shape) this.ink!.setShape(shape)
+        if (tool === 'eraser') this.toggleEraser()
+        else if (this.tool !== tool) this.setTool(tool)
+        else this.renderToolbar() // 还是这个工具,只是换了形状
+        return
+      }
     }
     if ((ev.key !== 'Delete' && ev.key !== 'Backspace') || this.tool !== 'select') return
     // 画上去的东西引擎自己删(这个按键接着会到它那里);选中的批注我们删。两边记成同一手。

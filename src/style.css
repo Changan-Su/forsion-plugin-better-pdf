@@ -12,6 +12,16 @@
 }
 .pr-group { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .pr-right { margin-left: auto; }
+/* 手写 / 形状的那一排:一块浮在页面上方的小面板(和底下的翻页条一个样子),不占工具栏的高度。窄处自己折行。查找条开着时让到它下面。 */
+.pr-toolbar { position: relative; }
+.pr-palette {
+  /* 居中用左右各留 10px + 自动外边距:写成 left:50% 再平移的话,可用宽度只剩一半,一排东西会被挤成三行 */
+  position: absolute; top: calc(100% + 10px); left: 10px; right: 10px; margin: 0 auto; width: fit-content; z-index: 5; box-sizing: border-box;
+  flex-wrap: wrap; justify-content: center; row-gap: 4px; padding: 5px 8px;
+  background: var(--bg-card, var(--surface)); border: 1px solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow, 0 2px 10px rgba(0, 0, 0, .12));
+}
+.pr-palette > .pr-sep:first-child { display: none; }
+.pr-root:has(.pr-findbar:not([hidden])) .pr-palette { top: calc(200% + 12px); }
 .pr-btn {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 26px; height: 26px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); cursor: pointer; line-height: 1;
@@ -21,13 +31,19 @@
 .pr-btn:disabled { opacity: .4; cursor: default; }
 .pr-tool { min-width: 28px; height: 28px; padding: 0 5px; border-color: transparent; color: var(--text-muted); }
 .pr-tool:hover:not(:disabled) { color: var(--text); }
-.pr-tool.on { color: var(--accent-ink, var(--accent)); border-color: var(--accent-ink, var(--accent)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.pr-tool.on, .pr-root[data-tail] .pr-tool[data-act="tool"][data-v="eraser"] { color: var(--accent-ink, var(--accent)); border-color: var(--accent-ink, var(--accent)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .pr-sep { flex: 0 0 auto; width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
 .pr-flex { flex: 1 1 auto; }
 .pr-dots { display: inline-flex; align-items: center; gap: 3px; padding: 0 3px; flex: 0 0 auto; }
 .pr-dot { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; display: grid; place-items: center; }
 .pr-dot::before { content: ''; width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
 .pr-dot.on::before { box-shadow: 0 0 0 2px var(--bg-card, var(--surface)), 0 0 0 3.5px var(--text); }
+/* 最后一颗:取色器。看得见的是一圈色环,真正被点的是盖在上面、透明的系统颜色输入框。 */
+.pr-custom { position: relative; }
+.pr-custom::before { background: conic-gradient(#ff6666, #ffd400, #5fb236, #2ea8e5, #a28ae5, #ff6666); }
+.pr-custom::after { content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--bg-card, var(--surface)); }
+.pr-custom input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.pr-custom:focus-within::before { box-shadow: 0 0 0 2px var(--bg-card, var(--surface)), 0 0 0 3.5px var(--accent); }
 .pr-penrow { display: inline-flex; gap: 1px; padding: 2px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); flex: 0 0 auto; }
 .pr-penrow .pr-tool { min-width: 26px; height: 24px; }
 .pr-penrow .pr-tool.on { background: var(--bg-card, var(--surface)); border-color: transparent; color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
@@ -87,8 +103,8 @@
 .pr-hl, .pr-ul, .pr-st, .pr-area { width: calc(var(--total-scale-factor) * var(--w) * 1px); height: calc(var(--total-scale-factor) * var(--h) * 1px); }
 .pr-hl { background: var(--c); mix-blend-mode: multiply; opacity: .5; border-radius: 2px; }
 .pr-hl.sel { opacity: .78; }
-/* 选中的批注:一圈虚线(和白板引擎选中元素的外框是一个意思)。擦到一半的先变淡,抬起才真删。 */
-.pr-marks > .sel { outline: 1.5px dashed var(--accent-ink, var(--accent)); outline-offset: 1.5px; }
+/* 选中的批注:一圈实线(界面里不画虚线边框)。擦到一半的先变淡,抬起才真删。 */
+.pr-marks > .sel { outline: 1.5px solid var(--accent-ink, var(--accent)); outline-offset: 1.5px; }
 .pr-marks > .erasing { opacity: .2; }
 .pr-ul, .pr-st { background: linear-gradient(var(--c), var(--c)) no-repeat; background-size: 100% max(1.5px, calc(var(--total-scale-factor) * 1.1px)); }
 .pr-ul { background-position: 0 100%; }
@@ -138,7 +154,9 @@
 .pr-card-foot { display: flex; align-items: center; gap: 6px; padding: 6px 12px 10px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
 .pr-tags { display: flex; flex-wrap: wrap; gap: 5px; white-space: normal; }
 .pr-tag { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; }
-.pr-tag.add { border-style: dashed; }
+/* 「+ 标签」是占位:不描边(留着 1px 透明边,和别的标签一样高),悬停给淡底。 */
+.pr-tag.add { border-color: transparent; }
+.pr-tag.add:hover { background: var(--bg-hover); }
 .pr-tag:not(.add):hover { text-decoration: line-through; }
 .pr-taginput { width: 108px; height: 20px; padding: 0 7px; border: 1px solid var(--accent-ink, var(--accent)); border-radius: 999px; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-caption, 11px); outline: none; }
 .pr-menu { display: flex; flex-direction: column; padding: 4px; min-width: 190px; }
