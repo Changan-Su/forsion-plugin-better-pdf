@@ -20,6 +20,7 @@ const M: Record<string, [string, string]> = {
   'tool.undo': ['撤销', 'Undo'],
   'tool.redo': ['重做', 'Redo'],
   'tool.color': ['颜色', 'Colour'],
+  'tool.customColor': ['自定义颜色', 'Custom colour'],
   'tool.width': ['粗细', 'Width'],
   'tool.penMode': ['手写笔模式:笔用来写和画,手指只滚动页面', 'Pen mode: the pen writes and draws, fingers only scroll'],
 
