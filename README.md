@@ -8,6 +8,9 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
 - **手写和形状是白板的元素**。笔迹、方框、圆、箭头、直线都是宿主白板的元素,用的是宿主的白板层接口 `ctx.ui.mountBoard`;
   「选择」工具下点选、拖动、缩放、框选它们,走的是白板引擎自己的那一套。这个接口在 2.13.1 之后的桌面版本里才有。
+- **白板的用法也在**。快捷键照白板的来:`V` 选择、`P` / `X` 手写、`E` 橡皮(再按一次回到上一个工具)、`R` `O` `A` `L` 四种形状、`T` 文字,另有 `H` 高亮、`U` 下划线、`N` 便签,数字键按工具栏顺序;
+  每一排色点的最后一颗是取色器,什么颜色都行,挑过的留在后面;手写笔翻过来就是橡皮,手写笔模式下手指连点两下在橡皮和刚才的工具之间来回换。
+  这几样白板层的接口本身不带(那一层没有界面、工具由调用方定),是本插件自己接的。
 - **引用是复制**。「复制引用」把原文、回到这一页的链接(`[[x.pdf#page=3|第 3 页]]`)和评论放进剪贴板,到笔记里自己粘贴;插件不替你建笔记。
 - **右栏**:批注列表、PDF 目录、Tangu 对话三个标签,跟着你最近操作的那份 PDF 走。
 - **装好是空的**:不带示例 PDF,不带演示批注。
@@ -64,6 +67,10 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 - 没有悬停的输入(手指、不带悬停的手写笔)在选择工具下选不中画上去的东西。
 - 撤销按「一次手势」记:擦掉 / 删掉的批注和白板那边的一步各是各的账,混着撤销时先后可能差一步,不会丢东西。
 - 手写笔模式下手指滚动页面没有惯性,也不能双指缩放;关掉这个模式后,笔再碰一下页面它会自己再打开。真的手写笔没试过(冒烟里的笔和手指是合成事件)。
+- 笔尾橡皮认的是指针事件里的 5 号键(笔翻过来、或驱动里把侧键设成「橡皮」时系统报的就是它)。侧键设成别的(右键、中键)不算;设成按一个键盘键的(比如 `E`)走快捷键那条路。
+  笔尾擦掉的笔迹撤销回来时按原来的上下层次放回;它不经白板引擎自己的撤销栈,所以「撤销了一笔 → 用笔尾擦了别的 → 重做」不会把那一笔翻回来。
+- 快捷键要键盘焦点在阅读器里才管用(点一下页面或工具栏即可);刚从文件树点开、还没碰过页面时,按键是给文件树的。
+- 取色器是系统 / 浏览器自带的那个,样子随系统。
 - 关掉手写笔模式要把白板层重挂一次,笔迹这边的撤销历史随之清空(删掉的批注照样能撤销回来)。
 - 选择工具下,手指落在白板层上时不交给引擎:拖是滚动页面,轻点会穿到页面上(点链接、点批注)。
 - 旧版本存下的「区域」框照样显示(不再填色),但新画的框是白板元素;旧的不会自动转过去。
@@ -87,10 +94,11 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 
 ## English
 
-**Better PDF** is a PDF reader and annotator for Forsion, built for working through papers. Select text to highlight (five colors), underline, strike through, comment and tag; place sticky notes and text on the page; draw boxes, ellipses, arrows and lines; write by hand with the seven pens of the whiteboard. The annotation list, the PDF outline and a Tangu chat sit in the right sidebar.
+**Better PDF** is a PDF reader and annotator for Forsion, built for working through papers. Select text to highlight (five preset colors plus any custom color), underline, strike through, comment and tag; place sticky notes and text on the page; draw boxes, ellipses, arrows and lines; write by hand with the seven pens of the whiteboard. The annotation list, the PDF outline and a Tangu chat sit in the right sidebar.
 
 - **The PDF is never modified.** Annotations live in a hidden file next to it (`.<name>.pdf.annot.json`, in the PDF's own coordinates). "More → Export annotated PDF" saves a separate copy with native PDF annotations.
 - **Handwriting and shapes are whiteboard elements**, so in the select tool they can be picked, moved, resized and box-selected, and the eraser removes anything (with undo). These need a desktop version newer than 2.13.1; on 2.13.1 and earlier the three buttons do not appear and everything else works.
+- **Whiteboard habits carry over.** Tool keys follow the whiteboard: `V` select, `P` / `X` draw, `E` eraser (press again to return to the previous tool), `R` `O` `A` `L` shapes, `T` text, plus `H` highlight, `U` underline, `N` note; digits follow the toolbar order. The last dot in every color row is a color picker, and recently picked colors stay next to it. Flip the stylus to erase; in pen mode a double tap with a finger toggles the eraser.
 - **Quoting is copying.** "Copy quote" puts the text, a link back to the page and your comment on the clipboard.
 - **It ships empty**: no sample PDF, no demo annotations.
 

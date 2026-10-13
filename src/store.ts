@@ -50,7 +50,11 @@ const readText = async (p: string): Promise<string | null> => { const b = await 
 function parse(text: string): Partial<Sidecar> | null {
   try {
     const d = JSON.parse(text)
-    return d && typeof d === 'object' && Array.isArray(d.annots) ? d : null
+    if (!d || typeof d !== 'object' || !Array.isArray(d.annots)) return null
+    // 这个文件别的程序也能写(同步来的、别人给的库)。id 和颜色会被拼进页面的 HTML 属性:id 不像样的条目不收,颜色不像样的换回黄色。
+    d.annots = d.annots.filter((a: any) => a && typeof a === 'object' && typeof a.id === 'string' && /^[\w-]{1,80}$/.test(a.id))
+    for (const a of d.annots) if (typeof a.color !== 'string' || !/^#[0-9a-f]{3,8}$/i.test(a.color)) a.color = '#ffd400'
+    return d
   } catch { return null }
 }
 

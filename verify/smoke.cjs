@@ -604,6 +604,7 @@ async function main() {
     check('⑯b 批注卡上认得这种颜色,再用取色器换一种:这条批注跟着换', cardDot === 1 && (readSidecar()?.annots ?? []).some((a) => a.id === made?.id && a.color === C2) && await win.locator(`.pr-card .pr-dot.on[data-v="${C2}"]`).count() === 1, JSON.stringify({ cardDot }))
     await win.screenshot({ path: path.join(SHOTS, '12-custom-colour-card.png') })
     await win.keyboard.press('Escape'); await win.waitForTimeout(250)
+    check('⑯b 批注卡上换完颜色,Esc 照样关得掉它(那一排色点重画之后键盘焦点没有掉出去)', await win.locator('.pr-card').count() === 0)
     await win.locator('.pr-toolbar input[type="color"][data-color="color"]').fill(C3); await win.waitForTimeout(250)
     const bar = await win.evaluate(() => ({ on: document.querySelector('.pr-toolbar .pr-dot.on')?.dataset.v, dots: [...document.querySelectorAll('.pr-toolbar .pr-dot[data-v]')].map((d) => d.dataset.v), rows: Math.round(document.querySelector('.pr-toolbar').getBoundingClientRect().height / document.querySelector('.pr-toolbar .pr-tool').getBoundingClientRect().height), kept: localStorage.getItem('forsion-pdf-reader.colors') }))
     check('⑯b 工具栏上挑的成了当前颜色;最近挑过的三种排在固定色点后面,记得住;工具栏仍是一行', bar.on === C3 && bar.dots.slice(-3).join() === [C3, C2, C1].join() && bar.dots.length === 8 && bar.rows === 1 && bar.kept === JSON.stringify([C3, C2, C1]), JSON.stringify(bar))
@@ -639,16 +640,17 @@ async function main() {
       check('⑯a 焦点在白板上时:⌘/Ctrl+F 照样打开查找条,Esc 照样回到选择工具', where && findOpen && escTool === 'select' && inkN() === k0 + 1, JSON.stringify({ where, findOpen, escTool, ink: [k0, inkN()] }))
       await press('p'); await win.waitForTimeout(500)
       // 合成的笔事件(CDP 发不出 5 号键):按下 → 等一拍 → 扫过去 → 抬起。指针号用鼠标那个(它一直在场,引擎抓指针时不会报错)。
-      const tail = (pts) => win.evaluate(async (pts) => {
+      const tail = (pts, midKey) => win.evaluate(async ([pts, midKey]) => {
         const fire = (type, [x, y], button, buttons) => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'pen', isPrimary: true, button, buttons, pressure: buttons ? 0.5 : 0 }))
         const wait = (ms) => new Promise((r) => setTimeout(r, ms))
         fire('pointerdown', pts[0], 5, 32); await wait(150)
         const root = document.querySelector('.pr-root'), lit = () => !!document.querySelector('.pr-toolbar [data-v="eraser"]') && getComputedStyle(document.querySelector('.pr-toolbar [data-v="eraser"]')).borderTopColor !== 'rgba(0, 0, 0, 0)'
         const during = [root.dataset.tool, 'tail' in root.dataset, lit()].join()
         for (const p of pts.slice(1)) { fire('pointermove', p, -1, 32); await wait(20) }
+        if (midKey) { document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: midKey, bubbles: true, cancelable: true })); await wait(60) }
         fire('pointerup', pts[pts.length - 1], 5, 0); await wait(500)
         return { during, after: [root.dataset.tool, 'tail' in root.dataset, lit()].join() }
-      }, pts)
+      }, [pts, midKey])
       const down = (x, y0, y1) => Array.from({ length: 9 }, (_, i) => [x, y0 + ((y1 - y0) * i) / 8])
       const k1 = inkN()
       const t1 = await tail(down(lx + 60, ly - 22, ly + 22)); await until(() => inkN() === k1 - 1, 5000)
@@ -658,6 +660,10 @@ async function main() {
       await win.keyboard.press('ControlOrMeta+z'); await until(() => inkN() === k1, 5000)
       const back = Object.values(readSidecar()?.ink ?? {}).flat().find((e) => e.strokeColor === '#ff00aa')
       check('⑯c 撤销:擦掉的那道线回来(还在原来的位置);重做:又擦掉;再撤销:又回来', u1 === k1 && r1 === k1 - 1 && inkN() === k1 && !!back && Math.abs(back.x - drawn.x) < 0.01 && Math.abs(back.y - drawn.y) < 0.01, JSON.stringify({ u1, r1, now: inkN(), at: back && [back.x, back.y], was: [drawn.x, drawn.y] }))
+      // 笔尾擦到一半按键换了工具:已经擦掉的那道线照样记了账,撤销得回来
+      const t3 = await tail(down(lx + 60, ly - 22, ly + 22), 'v'); await until(() => inkN() === k1 - 1, 5000); const m1 = inkN()
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => inkN() === k1, 5000)
+      check('⑯c 笔尾擦到一半按 V 换了工具:擦掉的那道线撤销得回来,橡皮的亮灯也收了', t3.after === 'select,false,false' && m1 === k1 - 1 && inkN() === k1, JSON.stringify({ ...t3, ink: [k1, m1, inkN()] }))
       // 高亮工具下(白板层这时不收指针,按下去落在页面上)用笔尾扫过刚才那条高亮:批注也擦得掉,抬起回到高亮
       await press('h'); await win.waitForTimeout(400)
       const hb = await sentenceBox(win, SENT), a1 = annN()

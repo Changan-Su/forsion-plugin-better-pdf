@@ -128,6 +128,17 @@ await t('更新版本的插件写的文件:只读,改了也不落盘', async () 
   d.add(A1); await d.flush()
   A.equal(dec.decode(files.get('.C.pdf.annot.json')), newer)
 })
+await t('别的程序写进批注文件的东西不能进页面的 HTML:id 不像样的条目不收,颜色不像样的换回黄色', async () => {
+  const { files } = fakeHost()
+  const evil = '#fff"><img src=x onerror="alert(1)">'
+  files.set('.X.pdf.annot.json', enc.encode(JSON.stringify({ version: 1, fingerprint: 'fp-x', ink: {}, annots: [
+    { ...A1, id: 'ok-1', color: evil, created: '', modified: '' }, { ...A1, id: 'ok_2', color: '#12AB34', created: '', modified: '' },
+    { ...A1, id: 'x" onmouseover="alert(1)', created: '', modified: '' }, { ...A1, id: 7, created: '', modified: '' }, null,
+  ] })))
+  const d = await (await load('src/store.ts')).acquire('X.pdf', 'fp-x')
+  A.deepEqual(d.data.annots.map((a) => [a.id, a.color]), [['ok-1', '#ffd400'], ['ok_2', '#12AB34']])
+})
+
 await t('PDF 改名 / 挪走之后按指纹把批注认回来,原处那份不动', async () => {
   const { files } = fakeHost()
   const S = await load('src/store.ts')

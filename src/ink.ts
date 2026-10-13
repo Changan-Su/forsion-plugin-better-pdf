@@ -309,11 +309,21 @@ export class InkLayer {
     if (gone.length) this.replace(els.filter((e) => !gone.includes(e)))
     return gone
   }
-  /** 撤销:放回去。ponytail: 放回的排在最上面(原来压在别的笔迹下面的会翻到上面);要原样的层次得记下它原来的位置。 */
-  putBack(els: any[]): void { if (this.handle) this.replace([...this.handle.getScene().elements, ...els]) }
-  /** 重做:再拿掉。 */
-  drop(els: any[]): void { const ids = new Set(els.map((e) => e.id)); if (this.handle) this.replace(this.handle.getScene().elements.filter((e) => !ids.has(e.id))) }
-  private replace(elements: any[]): void { this.handle!.update({ scene: { elements } }); this.dirty = true; this.commit() }
+  /** 撤销:放回去,按元素自带的层次号(引擎的 index,按字符串比)排回原来的上下顺序;没有层次号的老元素排在后面。 */
+  putBack(els: any[]): void {
+    if (!this.handle) return
+    const have = new Set(this.handle.getScene().elements.map((e) => e.id))
+    this.replace([...this.handle.getScene().elements, ...els.filter((e) => !have.has(e.id))].sort((x, y) => (!x.index || !y.index || x.index === y.index ? 0 : x.index < y.index ? -1 : 1)))
+  }
+  /** 重做:再拿掉,返回这次真正拿掉的(撤销之后它们可能被挪过、改过,下次放回的得是现在这一份)。 */
+  drop(els: any[]): any[] {
+    if (!this.handle) return els
+    const ids = new Set(els.map((e) => e.id)), cur = this.handle.getScene().elements, gone = cur.filter((e) => ids.has(e.id))
+    if (gone.length) this.replace(cur.filter((e) => !ids.has(e.id)))
+    return gone
+  }
+  /** 我们自己改的不算「引擎那边动过」(那是给撤销账问引擎用的)。 */
+  private replace(elements: any[]): void { const was = this.moved; this.handle!.update({ scene: { elements } }); this.dirty = true; this.commit(); this.moved = was }
 
   /** 指针按在了页面那一边:让引擎放下它选中的东西。接口上没有「取消选中」,借引擎自己的规矩 —— 切到别的工具会清掉选中,再切回来。 */
   unpick(): void {

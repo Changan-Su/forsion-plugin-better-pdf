@@ -126,6 +126,8 @@ export class Reader {
   /** 换到橡皮之前手上的工具(E 键、手指连点两下再回去用)。 */
   private beforeEraser: Tool = 'select'
   private lastTap = 0
+  /** 笔尾橡皮刚记过一手:引擎不知道这一手,它那边旧的「重做」还留着。账上没得重做时别再去叫引擎重做(会把早先撤销掉的东西翻回来)。 */
+  private redoCut = false
   private color = COLORS[0]
   private dead = false
   private readonly subs = new Set<() => void>()
@@ -391,7 +393,7 @@ export class Reader {
     this.root.dataset.tool = tool
     this.closePop()
     this.ghost(null)
-    if (this.press) { this.press = null; this.repaint() } // 还按着就换了工具:这一下作废(擦到一半变淡的恢复原样)
+    if (this.press) { const p = this.press; this.press = null; this.repaint(); if (p.tail) this.endTail(p, []) } // 还按着就换了工具:这一下作废(擦到一半变淡的恢复原样;笔尾已经擦掉的笔迹照样记账,好撤销)
     if (tool !== 'select') this.select(null)
     this.ink?.setTool(tool)
     this.renderToolbar()
@@ -404,7 +406,10 @@ export class Reader {
     if (kind === 'card') {
       if (!this.selected) return
       this.doc?.patch(this.selected, { color: c })
-      this.pop!.querySelector('.pr-dots')!.outerHTML = this.dotsHtml(c, 'color') // 重画这一排:刚用取色器挑的那种原来不在里面
+      // 重画这一排:刚用取色器挑的那种原来不在里面。被点的那颗跟着换掉了,键盘焦点还给新的那颗(不然掉到 body 上,Esc、撤销没人听)。
+      const dots = this.pop!.querySelector('.pr-dots')!, had = dots.contains(document.activeElement)
+      dots.outerHTML = this.dotsHtml(c, 'color')
+      if (had) (this.pop!.querySelector<HTMLElement>('.pr-dot.on') ?? this.container).focus({ preventScroll: true })
       return
     }
     this.color = c
@@ -493,6 +498,7 @@ export class Reader {
     // 白板层的工具由我们定死,引擎因此不接这颗键(它会拿当前的笔照画)。所以这一下不给引擎看,批注和画上去的东西都由我们自己擦。
     // 已经是橡皮工具时照常交给引擎。
     const tailEnd = ev.pointerType === 'pen' && ev.button === 5
+    if (this.press?.tail && onBoard) { ev.stopPropagation(); ev.preventDefault(); return } // 笔尾按着的时候,别的指针不许去动白板(那一手谁也不记账)
     if ((ev.button !== 0 && !tailEnd) || inPop(ev) || !this.doc || this.press) return
     const tail = tailEnd && this.tool !== 'eraser' && (onBoard || this.container.contains(ev.target as Node))
     if (tail) { ev.stopPropagation(); ev.preventDefault() } // preventDefault:落在字上时别开始选字
@@ -543,16 +549,14 @@ export class Reader {
     const p = this.press
     if (!p || ev.pointerId !== p.id || this.dead) return
     this.press = null
-    if (p.tail) { delete this.root.dataset.tail; ev.stopPropagation() }
-    if (ev.type === 'pointercancel' && !p.inkGone.length) { this.repaint(); return } // 系统收走了这一下:不算数(笔尾已经擦掉的笔迹照样记账,好撤销)
+    if (p.tail) ev.stopPropagation()
+    const cancelled = ev.type === 'pointercancel'
+    if (cancelled) this.repaint() // 系统收走了这一下:不算数,变淡的批注恢复原样(笔尾已经擦掉的笔迹照样记账,好撤销)
+    if (cancelled && !p.tail) return
     const moved = Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4, tool = this.tool
     let gone: Annot[] = []
-    if ((tool === 'eraser' || p.tail) && p.erased.size) gone = this.doc?.removeMany([...p.erased]) ?? []
-    if (p.tail) {
-      this.ink?.take() // 这一手是我们自己擦的,不记成「引擎那边动过」(那样撤销会叫引擎多退一步)
-      if (gone.length || p.inkGone.length) { this.log.push({ annots: gone, board: false, ink: p.inkGone }); this.redoLog.length = 0 }
-      return
-    }
+    if (!cancelled && (tool === 'eraser' || p.tail) && p.erased.size) gone = this.doc?.removeMany([...p.erased]) ?? []
+    if (p.tail) { this.endTail(p, gone); return }
     if (tool === 'select' && p.onBoard && this.ink) {
       if (p.hit) this.ink.pick([p.hit], p.shift)
       else if (moved) {
@@ -604,7 +608,16 @@ export class Reader {
   private step(annots: Annot[]): boolean {
     const board = this.ink?.take() ?? false
     if (annots.length || board) { this.log.push({ annots, board }); this.redoLog.length = 0 }
+    if (board) this.redoCut = false // 引擎自己记了新的一手,它那边旧的重做已经作废
     return board
+  }
+  /** 笔尾橡皮这一手收尾:白板上的是我们自己擦的(不经引擎),单记一笔,撤销时自己放回去。 */
+  private endTail(p: NonNullable<Reader['press']>, annots: Annot[]): void {
+    delete this.root.dataset.tail
+    const board = this.ink?.take() ?? false // 我们自己擦的不算在里面(见 InkLayer.replace);真是引擎动过才是 true
+    if (!annots.length && !p.inkGone.length && !board) return
+    this.log.push({ annots, board, ink: p.inkGone }); this.redoLog.length = 0
+    if (p.inkGone.length) this.redoCut = true
   }
   undo(): void {
     const s = this.log.pop()
@@ -617,8 +630,8 @@ export class Reader {
     const s = this.redoLog.pop()
     // 记下删掉时的样子:撤销之后用户可能又改过评论 / 标签,下次撤销放回的得是改过的这一份。
     if (s?.annots.length) { for (const a of s.annots) this.sel.delete(a.id); s.annots = this.doc?.removeMany(s.annots.map((a) => a.id)) ?? [] }
-    if (s?.ink?.length) this.ink?.drop(s.ink)
-    if (!s || s.board) this.ink?.redo()
+    if (s?.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
+    if (s ? s.board : !this.redoCut) this.ink?.redo()
     if (s) this.log.push(s)
   }
 
@@ -641,7 +654,7 @@ export class Reader {
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
       return
     }
-    if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat) {
+    if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
       const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools()[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
       if (tool && (this.ink || !BOARD_TOOLS.includes(tool))) {
         ev.preventDefault(); ev.stopPropagation()
