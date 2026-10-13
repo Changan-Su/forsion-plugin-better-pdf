@@ -667,11 +667,12 @@ async function main() {
       // 高亮工具下(白板层这时不收指针,按下去落在页面上)用笔尾扫过刚才那条高亮:批注也擦得掉,抬起回到高亮
       await press('h'); await win.waitForTimeout(400)
       const hb = await sentenceBox(win, SENT), a1 = annN()
-      const t2 = await tail(down((hb.left + hb.right) / 2, hb.top - 14, hb.bottom + 14)); await until(() => annN() === a1 - 1, 5000)
+      const t2 = await tail(down((hb.left + hb.right) / 2, hb.y0 - 5, hb.y0 + 5)); await until(() => annN() === a1 - 1, 5000) // 只在这一行里扫:上一行可能有别的高亮
       const sel2 = await win.evaluate(() => window.getSelection().isCollapsed)
       await win.keyboard.press('ControlOrMeta+z'); await until(() => annN() === a1, 5000); const a2 = annN()
-      await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => annN() === a1 - 1, 5000)
-      check('⑯c 高亮工具下用笔尾扫过一条高亮:擦掉了,工具还是高亮,没有顺手选中文字;撤销回来,重做又没', t2.during === 'highlight,true,true' && t2.after === 'highlight,false,false' && sel2 && a2 === a1 && annN() === a1 - 1, JSON.stringify({ ...t2, sel2, annots: [a1, a2, annN()] }))
+      await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => annN() === a1 - 1, 5000); const a3 = annN()
+      await win.keyboard.press('ControlOrMeta+z'); await until(() => annN() === a1, 5000) // 留着它:后面的检查还要看到高亮
+      check('⑯c 高亮工具下用笔尾扫过一条高亮:擦掉了,工具还是高亮,没有顺手选中文字;撤销回来,重做又没,再撤销又回来', t2.during === 'highlight,true,true' && t2.after === 'highlight,false,false' && sel2 && a2 === a1 && a3 === a1 - 1 && annN() === a1, JSON.stringify({ ...t2, sel2, annots: [a1, a2, a3, annN()] }))
       const penOn = await win.locator('.pr-toolbar [data-act="penmode"].on').count()
       // ⑯d 手写笔模式开着(刚才那支「笔」打开的):手写时手指连点两下 = 橡皮,再连点两下 = 回到手写;慢慢点两下不算
       await press('p'); await win.waitForTimeout(600)
