@@ -785,7 +785,8 @@ async function main() {
     await win.bringToFront().catch(() => {})
     await win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: /^选题$/ }) }).first().click(); await win.waitForTimeout(1500)
     const linkAt = () => win.evaluate((name) => {
-      const hit = [...document.querySelectorAll('.dv-groupview *')].filter((e) => !e.closest('.t2s-srow, .wb-tab, .pr-root') && e.children.length === 0 && (e.textContent || '').includes(name.replace(/\.pdf$/, '')))
+      // 叶子 = 除了图标没有别的子元素:2026-10-14 起文件类双链是「类型图标 <svg> + 文字」(Genesis 0d80205c),只认无子元素会找不到它
+      const hit = [...document.querySelectorAll('.dv-groupview *')].filter((e) => !e.closest('.t2s-srow, .wb-tab, .pr-root') && ![...e.children].some((c) => c.localName !== 'svg') && (e.textContent || '').includes(name.replace(/\.pdf$/, '')))
       const r = hit[0]?.getBoundingClientRect(); return r && r.width > 0 ? { x: r.left + Math.min(r.width / 2, 40), y: r.top + r.height / 2, tag: hit[0].tagName, cls: String(hit[0].className).slice(0, 60) } : null
     }, PDF)
     const link = await until(linkAt, 8000)
@@ -805,7 +806,7 @@ async function main() {
     const clickNoteLink = async (text, ok) => {
       await noteRow.click({ modifiers: ['ControlOrMeta'] }); await win.waitForTimeout(1200) // 笔记开在旁边的标签里,PDF 那个标签留着
       const at = await until(() => win.evaluate((x) => {
-        const e = [...document.querySelectorAll('.dv-groupview *')].find((n) => !n.closest('.t2s-srow, .wb-tab, .pr-root') && n.children.length === 0 && (n.textContent || '').trim() === x && n.getBoundingClientRect().width > 0)
+        const e = [...document.querySelectorAll('.dv-groupview *')].find((n) => !n.closest('.t2s-srow, .wb-tab, .pr-root') && ![...n.children].some((c) => c.localName !== 'svg') && (n.textContent || '').trim() === x && n.getBoundingClientRect().width > 0)
         const r = e?.getBoundingClientRect(); return r ? { x: r.left + Math.min(r.width / 2, 20), y: r.top + r.height / 2 } : null
       }, text), 8000)
       if (!at) return null
