@@ -1,7 +1,7 @@
 {
   "name": "forsion-plugin-better-pdf",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Better PDF:Forsion 的 PDF 阅读 / 批注插件(划线 / 批注 / 手写;构建源,产物 main.js 已提交)",
   "type": "module",
   "scripts": {
