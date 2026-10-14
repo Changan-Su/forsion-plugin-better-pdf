@@ -138,8 +138,10 @@ export class Reader {
   /** 宿主的划线条(新宿主才有);没有就照旧自己画浮条 .pr-selpop。 */
   private readonly bar: HostSelectionBarHandle | null
   private barShown = false
-  /** 这一下是在页面里按下的。按在划线条上的那一下(条挂在 body 下、随即收起),松手常常落回页面:那不是一次新的选择。 */
-  private downInPage = false
+  /** 在页面里按下的那个指针。按在划线条上的那一下(条挂在 body 下、随即收起),松手常常落回页面:那不是一次新的选择。 */
+  private downInPage: number | null = null
+  /** 划线条上的取色器打开时那段选区(取色面板不挡操作,挑好之前选区可能已经换了);在阅读器里再按一下就作废。 */
+  private pendingPick: { pages: PageQuads[]; text: string } | null = null
   private justMade = 0
   private thumbsBuilt = false
   private pendingGoto: { page: number; quote?: string } | null = null
@@ -271,13 +273,19 @@ export class Reader {
     on(container, 'wheel', (ev: WheelEvent) => this.onWheel(ev), { passive: false })
     // 划线条是按当时的位置摆在视口上的:页面一滚就不在选区旁边了。
     on(container, 'scroll', () => { this.ink?.onScroll(); this.hideBar() }, { passive: true })
-    on(container, 'pointerdown', (ev: PointerEvent) => { this.downInPage = true; this.onDown(ev) })
+    on(container, 'pointerdown', (ev: PointerEvent) => { this.downInPage = ev.pointerId; this.onDown(ev) })
     on(container, 'pointerup', (ev: PointerEvent) => {
-      const fromPage = this.downInPage || !this.bar
-      this.downInPage = false
+      const fromPage = !this.bar || this.downInPage === ev.pointerId
+      if (this.downInPage === ev.pointerId) this.downInPage = null
       if (fromPage && !inPop(ev)) setTimeout(() => this.onSelection(), 0)
     })
-    on(window, 'pointerup', () => { this.downInPage = false }) // 在页面里按下、到外面松手的那一下也清掉(冒泡阶段,排在上面那条后面)
+    // 在页面里按下、拖到页面外才松手:也是一次选择(冒泡阶段,排在上面那条后面 —— 松在页面里的那一下上面已经处理并清掉了)。
+    on(window, 'pointerup', (ev: PointerEvent) => {
+      if (this.downInPage !== ev.pointerId) return
+      this.downInPage = null
+      if (this.bar) setTimeout(() => this.onSelection(), 0)
+    })
+    on(window, 'pointercancel', (ev: PointerEvent) => { if (this.downInPage === ev.pointerId) this.downInPage = null })
     on(container, 'click', (ev: MouseEvent) => this.onClick(ev))
     on(this.root, 'pointerdown', (ev: PointerEvent) => {
       setActive(this)
@@ -285,6 +293,7 @@ export class Reader {
       const tg = ev.target as HTMLElement
       if (this.pop && !inPop(ev) && !tg.closest('[data-a], [data-act="more"]')) this.closePop()
       this.hideBar() // 条在 body 下:按在这个阅读器里的任何地方都是「点到条外面」
+      this.pendingPick = null
     }, { capture: true })
     on(this.root, 'focusin', () => setActive(this))
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKey(ev))
@@ -413,6 +422,7 @@ export class Reader {
     if (tool === 'eraser' && this.tool !== 'eraser') this.beforeEraser = this.tool
     this.tool = tool
     this.root.dataset.tool = tool
+    this.pendingPick = null
     this.closePop()
     this.ghost(null)
     if (this.press) { const p = this.press; this.press = null; this.repaint(); if (p.tail) this.endTail(p, []) } // 还按着就换了工具:这一下作废(擦到一半变淡的恢复原样;笔尾已经擦掉的笔迹照样记账,好撤销)
@@ -423,7 +433,13 @@ export class Reader {
 
   private pickColor(c: string, from: HTMLElement): void {
     // 浮条 / 批注卡里的色点有自己的含义(给选区上色、给这条批注换色),工具栏上的才是「当前颜色」。
-    const kind = from.dataset.color === 'sel' ? 'sel' : from.closest<HTMLElement>('.pr-pop')?.dataset.kind // 'sel' = 宿主划线条那一格替它点开的取色器
+    if (from.dataset.color === 'sel') { // 宿主划线条那一格替它点开的取色器:落在打开时的那段选区上,作废了就不落
+      const p = this.pendingPick
+      this.pendingPick = null
+      if (p?.pages.length) { this.color = c; this.markSelection('highlight', p.pages, p.text); this.renderToolbar() }
+      return
+    }
+    const kind = from.closest<HTMLElement>('.pr-pop')?.dataset.kind
     if (kind === 'sel') { this.color = c; this.markSelection('highlight'); this.renderToolbar(); return }
     if (kind === 'card') {
       if (!this.selected) return
@@ -707,13 +723,7 @@ export class Reader {
     if (this.tool !== 'select') return
     const rects = [...sel!.getRangeAt(0).getClientRects()].filter((r) => r.width > 1 && r.height > 1)
     if (!rects.length) return
-    if (this.bar) {
-      const rect = { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) }
-      this.bar.update({ tools: this.barTools() }) // 最近挑过的颜色、界面语言随时会变:每次出条现算
-      this.bar.show({ text: this.selText(), rect })
-      this.barShown = true
-      return
-    }
+    if (this.bar) { this.showBar(rects); return }
     // 没有共用划线条的宿主(2.13.3 及更早):自己画浮条。
     const dots = this.dotsHtml(null, 'color')
     const b = (act: string, ic: string, tip: string, txt = ''): string => `<button class="pr-pbtn${txt ? ' txt' : ''}" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}${esc(txt)}</button>`
@@ -743,8 +753,8 @@ export class Reader {
       { id: 'underline', title: t('tool.underline'), icon: 'underline', run: () => { this.markSelection('underline') } },
       { id: 'strike', title: t('tool.strike'), icon: 'strikethrough', run: () => { this.markSelection('strike') } },
       { id: 'comment', title: t('sel.comment'), icon: 'annotate', run: () => { const a = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } } },
-      { id: 'copy', title: t('sel.copy'), icon: 'copy', run: (s) => { void navigator.clipboard?.writeText(s.text); ctx.notify?.(t('copy.done')); this.closePop() } },
-      { id: 'cite', title: t('sel.cite'), icon: 'cite', run: (s) => { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text: s.text }); this.closePop() } },
+      { id: 'copy', title: t('sel.copy'), icon: 'copy', run: () => { void navigator.clipboard?.writeText(this.selText()); ctx.notify?.(t('copy.done')); this.closePop() } },
+      { id: 'cite', title: t('sel.cite'), icon: 'cite', run: () => { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text: this.selText() }); this.closePop() } },
     ]
   }
 
@@ -753,7 +763,25 @@ export class Reader {
     let i = this.root.querySelector<HTMLInputElement>('.pr-selcolor')
     if (!i) { i = el<HTMLInputElement>('<input type="color" class="pr-selcolor" data-color="sel" tabindex="-1" aria-hidden="true">'); this.root.append(i) }
     i.value = recent[0] ?? COLORS[0]
+    this.pendingPick = { pages: selectionToQuads(this.viewer), text: this.selText() }
     i.click() // 按条上那一下是 mousedown,算用户手势,取色器开得出来
+  }
+
+  private showBar(rects: DOMRect[]): void {
+    const rect = { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) }
+    this.bar!.update({ tools: this.barTools() }) // 最近挑过的颜色、界面语言随时会变:每次出条现算
+    this.bar!.show({ text: this.selText(), rect })
+    this.barShown = true
+  }
+
+  /** 条出着的时候选区变了(Shift+方向键、点到别处收起了):条跟着换到新的那段,或者收起 —— 免得条上的动作拿到的是旧的那段字。 */
+  private syncBar(): void {
+    if (!this.barShown) return
+    const sel = window.getSelection()
+    const rects = sel && !sel.isCollapsed && sel.anchorNode && this.container.contains(sel.anchorNode)
+      ? [...sel.getRangeAt(0).getClientRects()].filter((r) => r.width > 1 && r.height > 1) : []
+    if (rects.length) this.showBar(rects)
+    else this.hideBar()
   }
 
   /** 收起划线条(结果卡不跟着收:它点到外面自己会关)。 */
@@ -765,6 +793,7 @@ export class Reader {
 
   /** 高亮 / 下划线工具下,选区每变一次就把「松手会得到的那几条」画出来(浏览器自己的选区蓝底这时是藏着的)。 */
   private onSelChange(): void {
+    this.syncBar()
     if (this.tool !== 'highlight' && this.tool !== 'underline') return
     const sel = window.getSelection()
     this.ghost(sel && !sel.isCollapsed && sel.anchorNode && this.container.contains(sel.anchorNode) ? selectionToQuads(this.viewer) : null)
@@ -780,10 +809,8 @@ export class Reader {
   }
 
   /** 把当前选区变成一条(跨页则每页一条)批注,返回第一条。 */
-  private markSelection(type: 'highlight' | 'underline' | 'strike'): Annot | null {
+  private markSelection(type: 'highlight' | 'underline' | 'strike', pages = selectionToQuads(this.viewer), text = this.selText()): Annot | null {
     if (!this.doc) return null
-    const pages = selectionToQuads(this.viewer)
-    const text = this.selText()
     let first: Annot | null = null
     for (const p of pages) {
       const a = this.doc.add({ type, page: p.page, color: this.color, quads: p.quads, text: first ? '' : text })
