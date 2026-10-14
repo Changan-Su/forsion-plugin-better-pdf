@@ -216,12 +216,12 @@ async function main() {
       await win.waitForTimeout(500)
       await dragSelect(win, S2); await shown(win, SELPOP)
       await win.evaluate(() => { window.__clip = null; Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async (s) => { window.__clip = s } }) })
-      // 条出着的时候选区变了(这里是往回缩三个字,和 Shift+← 一样):条跟着换,复制的是现在的那段
+      // 条出着的时候选区变了(这里用 selection.modify 动三个字,和 Shift+← 一样;往哪边动看选区的方向):条跟着换,复制的是现在的那段
       await win.evaluate(() => { const s = window.getSelection(); for (let i = 0; i < 3; i++) s.modify('extend', 'backward', 'character') }); await win.waitForTimeout(300)
       const shrunk = await win.evaluate(() => window.getSelection().toString().replace(/\s+/g, ' ').trim())
       await win.locator(`${SELPOP} [data-act="copy"]`).first().click(); await win.waitForTimeout(600)
       const copied = await win.evaluate(() => window.__clip), bars = await win.locator(SELPOP).count()
-      check('②h 选区变了再按「复制」:复制的是现在的那段;条收起、松手后不再自己弹回来', copied === S2.slice(0, -3) && copied === shrunk && bars === 0, JSON.stringify({ copied, shrunk, bars }))
+      check('②h 选区变了再按「复制」:复制的是现在的那段;条收起、松手后不再自己弹回来', shrunk !== S2 && copied === shrunk && bars === 0, JSON.stringify({ copied, shrunk, bars }))
       // 从页面里拖到页面外才松手:也算一次选择,条照样出来
       await win.evaluate(() => window.getSelection().removeAllRanges()); await win.waitForTimeout(500)
       const out = await win.evaluate(() => { const r = document.querySelector('.pr-root .pr-container').getBoundingClientRect(); return { x: r.right + 30, y: r.top + 60 } })
