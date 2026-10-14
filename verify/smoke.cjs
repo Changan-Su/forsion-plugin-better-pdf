@@ -7,6 +7,8 @@
 //   node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒烟" --eta=4 -- node Forsion-Instrumentality-Project/forsion-plugin-pdf-reader/verify/smoke.cjs
 // GENESIS_DESKTOP=<桌面端检出> 换一份宿主(默认仓根的 Forsion-Genesis/desktop)。
 // UI_ZOOM=1.1 在界面缩放 110% 下跑同一遍(用户的开发实例就是 110%;100% 下看不见偏移类问题)。
+// 宿主有共用划线条(ctx.ui.mountSelectionBar,2.13.3 之后)时选区走宿主的条,并多跑 ②h 那几项;没有时走插件自己的浮条 .pr-selpop。
+// 两种宿主各跑一遍,旧的那条路才算没坏。
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const HERE = path.resolve(__dirname, '..')
 const DESK = process.env.GENESIS_DESKTOP || path.resolve(HERE, '../../Forsion-Genesis/desktop')
@@ -14,6 +16,12 @@ const electron = require(path.join(DESK, 'scripts/lib/launch-electron.cjs'))
 const { chromium } = require(path.join(DESK, 'node_modules/playwright-core'))
 const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs')) // 假后端:让右栏的对话接得上(不跑模型)
 const SHOTS = path.join(HERE, '.shots'); fs.mkdirSync(SHOTS, { recursive: true })
+// 宿主有共用的划线条(ctx.ui.mountSelectionBar)时,选区浮出的是它;没有(2.13.3 及更早)时是插件自己的浮条 .pr-selpop。
+const HOSTBAR = fs.existsSync(path.join(DESK, 'frontend/src/amadeus/plugins/selectionBarSurface.tsx'))
+const SELPOP = HOSTBAR ? '[data-testid="selection-bar"]' : '.pr-selpop'
+const SELDOT = HOSTBAR ? `${SELPOP} .selbar-dot` : '.pr-selpop .pr-dot'
+/** 假引擎回的「译文」(划线条上的翻译走 /agent/inline,流式)。 */
+const sse = (events) => ({ __buffer: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), contentType: 'text/event-stream' })
 const PDF = 'Reading Fixture.pdf'; const FOLDER = '文献'
 const S1 = 'Annotation pays off when you come back to it.'
 const S2 = 'A highlight is a decision that a sentence matters.'
@@ -22,6 +30,8 @@ const S4 = 'Forty-eight readers took part.'
 
 /** 等到条件成立(落盘是改完 0.4 秒后的事,窗口不在前台时定时器还会被浏览器放慢)。 */
 const until = async (fn, ms = 6000) => { const end = Date.now() + ms; for (;;) { let v; try { v = await fn() } catch { v = null } if (v || Date.now() > end) return v; await new Promise((r) => setTimeout(r, 120)) } }
+/** 浮条 / 划线条出来了没有(宿主的条是懒加载的,第一次可能晚一拍)。 */
+const shown = (win, sel) => win.locator(sel).first().waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)
 const fails = []
 const LINKS = process.env.ONLY === 'links'
 // ONLY=parity:只走 ⑯(白板的用法:快捷键、自定义颜色、笔尾橡皮、手指连点两下),自己画自己擦,不靠前面留下的东西。
@@ -142,7 +152,14 @@ async function main() {
   const pdfBefore = fs.readFileSync(path.join(vault, FOLDER, PDF))
   const errors = []
 
-  const stub = await startStubEngine()
+  const stub = await startStubEngine({
+    handle: async ({ path: route, method, body }) => {
+      if (route !== '/agent/inline' || method !== 'POST') return undefined
+      const answer = `译文:${String((await body()).selection).slice(0, 12)}`
+      return sse([{ type: 'delta', text: answer }, { type: 'done', content: answer, toolCallText: false }])
+    },
+  })
+  console.log(HOSTBAR ? '宿主有共用划线条:选区走宿主的条' : '宿主没有共用划线条:选区走插件自己的浮条')
   let { app, win } = await launch(home, vault, stub.url)
   win.on('pageerror', (e) => errors.push(String(e)))
   win.on('console', (m) => { if (m.type() === 'error' && /pdf-reader|pdfjs|Worker/i.test(m.text())) errors.push(m.text()) })
@@ -166,12 +183,13 @@ async function main() {
 
     // ② 选中一句 → 浮条 → 点第一颗颜色 = 高亮
     const b1 = await dragSelect(win, S1)
-    check('② 选中文字浮出浮条', await win.locator('.pr-selpop').isVisible())
-    const near = async (sel, box) => { const r = await win.locator(sel).boundingBox(); return !!r && r.x < box.right && r.x + r.width > box.left && Math.min(Math.abs(r.y + r.height - box.top), Math.abs(r.y - box.bottom)) < 40 ? true : JSON.stringify(r) }
-    const selNear = await near('.pr-selpop', b1)
+    check('② 选中文字浮出浮条', await shown(win, SELPOP))
+    const near = async (sel, box) => { const r = await win.locator(sel).first().boundingBox(); return !!r && r.x < box.right && r.x + r.width > box.left && Math.min(Math.abs(r.y + r.height - box.top), Math.abs(r.y - box.bottom)) < 40 ? true : JSON.stringify(r) }
+    const selNear = await near(SELPOP, b1)
     check('② 浮条贴着选区(上下 40px 内、左右有交叠)', selNear === true, selNear === true ? '' : `${selNear} vs ${JSON.stringify(b1)}`)
+    await win.waitForTimeout(250) // 宿主的条有 180ms 的入场淡入:等它放完再拍
     await win.screenshot({ path: path.join(SHOTS, '1-selection.png') })
-    await win.locator('.pr-selpop .pr-dot').first().click(); await until(() => readSidecar()?.annots?.length === 1)
+    await win.locator(SELDOT).first().click(); await until(() => readSidecar()?.annots?.length === 1)
     const hl = await win.evaluate(() => [...document.querySelectorAll('.pr-hl')].map((e) => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom] }))
     const cover = hl.length && Math.abs(Math.min(...hl.map((r) => r[0])) - b1.left) < 3 && Math.abs(Math.max(...hl.map((r) => r[2])) - b1.right) < 3 && Math.abs(hl[0][1] - b1.top) < 4
     check('② 高亮盖在那句话上(误差 < 4px)', !!cover, JSON.stringify({ hl: hl.map((r) => r.map(Math.round)), want: [b1.left, b1.top, b1.right, b1.bottom].map(Math.round) }))
@@ -180,6 +198,42 @@ async function main() {
     // Letter 页 612×792pt、页边距 1in:坐标必须落在 PDF 用户空间里(不是屏幕像素)。
     check('② 旁挂文件里是 PDF 坐标 + 原文', !!q && q[0] >= 70 && q[2] <= 545 && q[1] > q[5] && q[1] < 792 && sc.annots[0].text === S1, JSON.stringify(sc?.annots?.[0] ?? null).slice(0, 220))
     check('② PDF 文件一个字节没动', Buffer.compare(pdfBefore, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0)
+
+    // ②h 共用划线条(新宿主):本视图的工具在前,问 Tangu / 翻译在后;按了条上的按钮,条不会自己弹回来;
+    // 翻译卡在选区下面,滚动页面只收条、卡留着。
+    if (HOSTBAR) {
+      await win.waitForTimeout(500)
+      const b2 = await dragSelect(win, S2)
+      await shown(win, SELPOP)
+      const acts = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] [data-act]')].map((b) => b.dataset.act))
+      const want = ['color-ffd400', 'custom-color', 'underline', 'strike', 'comment', 'copy', 'cite', 'ask', 'translate']
+      check('②h 条上有本视图的工具和共用动作,本视图的在前', want.every((a) => acts.includes(a)) && acts.indexOf('cite') < acts.indexOf('ask'), acts.join())
+      await win.waitForTimeout(250); await win.screenshot({ path: path.join(SHOTS, '1h-hostbar.png') })
+      await win.locator(`${SELPOP} [data-act="ask"]`).first().click()
+      const asked = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S2), 8000)
+      check('②h 条上的「问 Tangu」走插件自己的:引文递进右栏的对话', !!asked, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
+      await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
+      await win.waitForTimeout(500)
+      await dragSelect(win, S2); await shown(win, SELPOP)
+      await win.evaluate(() => { window.__clip = null; Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async (s) => { window.__clip = s } }) })
+      await win.locator(`${SELPOP} [data-act="copy"]`).first().click(); await win.waitForTimeout(600)
+      const copied = await win.evaluate(() => window.__clip), bars = await win.locator(SELPOP).count()
+      check('②h 按条上的「复制」:复制了选中的那句,条收起、松手后不再自己弹回来', copied === S2 && bars === 0, JSON.stringify({ copied, bars }))
+      await win.evaluate(() => window.getSelection().removeAllRanges())
+      await dragSelect(win, S2); await shown(win, SELPOP)
+      await win.locator(`${SELPOP} [data-act="translate"]`).first().click()
+      const card = win.locator('[data-testid="inline-ai-panel"]')
+      const got = await until(() => card.innerText().then((s) => s.includes('译文') && s), 8000)
+      const cb = await card.boundingBox().catch(() => null)
+      check('②h 翻译:结果卡出在选区下面,是假引擎回的译文', !!got && !!cb && cb.y >= b2.bottom - 2 && cb.y - b2.bottom < 40, JSON.stringify({ got: String(got).slice(0, 60), cb, b2: { bottom: b2.bottom } }))
+      await win.waitForTimeout(250); await win.screenshot({ path: path.join(SHOTS, '1h-translate.png') })
+      await win.evaluate(() => document.querySelector('.pr-root .pr-container').scrollBy(0, 30)); await win.waitForTimeout(400)
+      check('②h 滚动页面:结果卡留着,条不出来', await card.isVisible() && await win.locator(SELPOP).count() === 0)
+      await win.keyboard.press('Escape'); await win.waitForTimeout(250)
+      check('②h Esc 收起结果卡', await card.count() === 0)
+      await win.evaluate(() => { document.querySelector('.pr-root .pr-container').scrollBy(0, -30); window.getSelection().removeAllRanges() })
+      await win.waitForTimeout(300)
+    }
 
     // ③ 点这条高亮 → 批注卡:写评论、打标签、换色
     await win.waitForTimeout(500) // 刚划完 0.35 秒内的点击阅读器故意不理(那是划选收尾的那一下)
@@ -281,7 +335,7 @@ async function main() {
 
       // ⑪ 选择工具:白板层挂着也照样能选字
       await dragSelect(win, S3)
-      check('⑪ 有笔迹之后,选择工具照样选得中文字', await win.locator('.pr-selpop').isVisible())
+      check('⑪ 有笔迹之后,选择工具照样选得中文字', await shown(win, SELPOP))
       await win.keyboard.press('Escape'); await win.evaluate(() => window.getSelection().removeAllRanges())
       // ⑪a 点中方框的边、拖动:存下来的位置跟着走
       const x0 = rectOnDisk().x
@@ -304,7 +358,7 @@ async function main() {
       const f3 = await sentenceBox(win, S3) // 回到选择后工具栏变回一行,页面又挪了
       await win.mouse.move(f3.left - 44 + E.w / 2, f3.top - 22, { steps: 3 }); await win.waitForTimeout(120); await win.mouse.down(); await win.mouse.up(); await win.waitForTimeout(250)
       await dragSelect(win, S3)
-      check('⑪a2 选中圈住一句话的圆之后,圈里的字照样能选', !!ell && await win.locator('.pr-selpop').isVisible(), JSON.stringify(ell ? { w: ell.width, h: ell.height } : null))
+      check('⑪a2 选中圈住一句话的圆之后,圈里的字照样能选', !!ell && await shown(win, SELPOP), JSON.stringify(ell ? { w: ell.width, h: ell.height } : null))
       await win.screenshot({ path: path.join(SHOTS, '2e2-ellipse-text.png') })
       await win.keyboard.press('Escape'); await win.evaluate(() => window.getSelection().removeAllRanges())
       // ⑪b 这时引擎选中着刚才点的那个圆。去点文字:引擎得把它放下(把键盘焦点塞回白板再按删除,画上去的东西一个都不该少)
@@ -596,9 +650,17 @@ async function main() {
     const C1 = '#123456', C2 = '#abcdef', C3 = '#0a7f5c', SENT = 'most of those marks are never looked at again.'
     const a0 = annN()
     const sb = await dragSelect(win, SENT)
-    await win.locator('.pr-selpop input[type="color"]').fill(C1); await until(() => annN() === a0 + 1, 4000)
+    let picks = null
+    if (HOSTBAR) {
+      // 条上那颗彩虹点替页面里看不见的取色器点开系统的取色面板:台架里不真开它,只记有没有被点开,再像挑好了一样填值。
+      await win.evaluate(() => { window.__picks = 0; const click = HTMLInputElement.prototype.click; HTMLInputElement.prototype.click = function () { if (this.type === 'color') { window.__picks++; return } return click.call(this) } })
+      await shown(win, SELPOP); await win.locator(`${SELPOP} [data-act="custom-color"]`).first().click()
+      picks = await win.evaluate(() => window.__picks)
+      await win.locator('.pr-root .pr-selcolor').fill(C1)
+    } else await win.locator('.pr-selpop input[type="color"]').fill(C1)
+    await until(() => annN() === a0 + 1, 4000)
     const made = (readSidecar()?.annots ?? []).find((a) => a.color === C1)
-    check('⑯b 选区浮条上用取色器挑一种:高亮就是这个颜色', annN() === a0 + 1 && made?.type === 'highlight', JSON.stringify({ n: [a0, annN()], made: made && { type: made.type, color: made.color } }))
+    check('⑯b 选区浮条上用取色器挑一种:高亮就是这个颜色', annN() === a0 + 1 && made?.type === 'highlight' && (!HOSTBAR || picks === 1), JSON.stringify({ n: [a0, annN()], picks, made: made && { type: made.type, color: made.color } }))
     await win.waitForTimeout(500); await win.mouse.click((sb.left + sb.right) / 2, sb.y0); await win.waitForSelector('.pr-card', { timeout: 4000 }).catch(() => {})
     const cardDot = await win.locator(`.pr-card .pr-dot.on[data-v="${C1}"]`).count()
     await win.locator('.pr-card input[type="color"]').fill(C2); await until(() => (readSidecar()?.annots ?? []).some((a) => a.id === made?.id && a.color === C2), 4000)

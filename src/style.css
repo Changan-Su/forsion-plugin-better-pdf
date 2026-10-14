@@ -43,6 +43,8 @@
 .pr-custom::before { background: conic-gradient(#ff6666, #ffd400, #5fb236, #2ea8e5, #a28ae5, #ff6666); }
 .pr-custom::after { content: ''; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--bg-card, var(--surface)); }
 .pr-custom input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+/* 宿主划线条上那颗彩虹点替它点开的取色器:看不见、点不着,只为开系统的取色面板。 */
+.pr-selcolor { position: fixed; left: 0; top: 0; width: 1px; height: 1px; margin: 0; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 .pr-custom:focus-within::before { box-shadow: 0 0 0 2px var(--bg-card, var(--surface)), 0 0 0 3.5px var(--accent); }
 .pr-penrow { display: inline-flex; gap: 1px; padding: 2px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); flex: 0 0 auto; }
 .pr-penrow .pr-tool { min-width: 26px; height: 24px; }
