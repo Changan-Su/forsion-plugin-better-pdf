@@ -35,6 +35,16 @@ interface HostBoardHandle {
   dispose(): void
 }
 
+/** 宿主的划线条(ctx.ui.mountSelectionBar,2.13.3 之后的桌面版本才有)。 */
+interface HostSelectionBarSelection { text: string; markdown?: string }
+interface HostSelectionBarTool { id: string; title: string; icon?: string; color?: string; on?: boolean; run(sel: HostSelectionBarSelection): void }
+interface HostSelectionBarHandle {
+  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number } }): void
+  hide(): void
+  update(opts: { tools?: HostSelectionBarTool[] }): void
+  dispose(): void
+}
+
 declare const ctx: {
   app: {
     readFile(path: string): Promise<string | null>
@@ -72,6 +82,13 @@ declare const ctx: {
   ui?: {
     mountBoard?(el: HTMLElement, opts: HostBoardOptions): HostBoardHandle
     boardToSvg?(scene: HostBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<{ svg: SVGSVGElement; x: number; y: number; width: number; height: number } | null>
+    mountSelectionBar?(root: HTMLElement, opts?: {
+      view?: string
+      tools?: HostSelectionBarTool[]
+      ask?: ((sel: HostSelectionBarSelection) => void) | false
+      source?(sel: HostSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
+      watch?: boolean
+    }): HostSelectionBarHandle
   }
 }
 
