@@ -110,3 +110,11 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 On desktop versions newer than 2.13.2, every way of opening a PDF goes to this plugin: the file tree, recent items, `[[x.pdf]]` note links, page links such as `[[x.pdf#page=3]]` (what "Copy citation" produces; clicking one lands on that page) and chat citations (a quoted passage is marked through the find bar). Only `![[x.pdf]]` embeds, the explicit "Open with the built-in reader" entry and PDFs outside the vault stay with the built-in reader. On desktop 2.13.2 and earlier, note links and chat citations still open the built-in reader; open the PDF from the file tree instead.
 
 Requires desktop Forsion 2.13.0 or newer. Desktop only.
+
+## 外部 PDF 与宿主动效（功能分支，尚未发布）
+
+配套桌面宿主支持后，系统「用 Forsion 打开」的库外 PDF 也按默认打开器交给 Better PDF。批注保存到原文件旁的隐藏 `.annot.json`，源文件保持只读；导出经系统另存为保存副本。源目录只读时会报告保存失败。旧宿主继续用原来的库内阅读方式。
+
+批注卡、更多菜单和工具提示优先使用 `ctx.ui.popover` / `contextMenu` / `attachTooltip`；查找、缩略图和首次出现的画笔浮板消费共享 `data-motion`。旧宿主保留原有控件。动效时长、曲线和减少动态效果遵循宿主。
+
+新增回归：先构建配套桌面，再在 devlock 的 e2e 锁下运行 `GENESIS_DESKTOP=<桌面目录> node verify/external-motion.cjs`。覆盖冷启动 / 运行中的系统打开事件、库外批注、立即关闭前的保存、重开、导出、宿主浮层与减少动态效果。`node check.mjs` 另覆盖外部文件多标签共享句柄与最终保存。

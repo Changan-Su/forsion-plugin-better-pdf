@@ -1,3 +1,4 @@
+interface HostFileIO { saveCopy?(name: string, bytes: Uint8Array): Promise<string | null>; readBytes(path: string): Promise<Uint8Array | null>; writeBytes(path: string, bytes: Uint8Array): Promise<void> }
 // 宿主注入的 `ctx`(new Function('ctx', code) 的形参)。只声明本插件用到的面;带 ? 的是较新宿主才有的,用前探测。
 // 完整契约见 Forsion-Genesis/desktop/frontend/src/amadeus/plugins/types.ts。
 
@@ -63,9 +64,9 @@ declare const ctx: {
     hostPath?(path: string): string | null
   }
   registerFileType(def: {
-    id: string; extensions: string[]; icon?: string; title?: string; override?: boolean
+    id: string; extensions: string[]; icon?: string; title?: string; override?: boolean; external?: boolean
     /** onGoto:带页码的链接、聊天引用点过来的落点(2.13.2 之后的桌面版本才有;没有它的宿主上这类链接归内置阅读器)。 */
-    mount(el: HTMLElement, file: { filePath: string; onGoto?: OnGoto }): (() => void) | void
+    mount(el: HTMLElement, file: { filePath: string; io?: HostFileIO; onGoto?: OnGoto }): (() => void | Promise<void>) | void
   }): boolean | void
   registerView(view: { id: string; title: string; icon?: string; mount(el: HTMLElement): (() => void) | void }): void
   openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' | 'bottom' }): void
@@ -80,6 +81,10 @@ declare const ctx: {
     startChat?(o: { prompt: string; send?: boolean; folder?: string }): Promise<{ ok: boolean; error?: string }>
   }
   ui?: {
+    attachTooltip?(el: HTMLElement, content: string, opts?: { side?: 'top' | 'bottom' | 'left' | 'right' }): { dispose(): void }
+    contextMenu?(at: { anchor: HTMLElement; align?: 'start' | 'end' }, items: { label: string; icon?: string; run(): void }[], opts?: { onClose?(): void }): () => void
+    popover?(anchor: HTMLElement, opts: { side?: 'top' | 'bottom'; label?: string; mount(el: HTMLElement): void | (() => void); onClose?(): void }): { dispose(): void; update(): void }
+
     mountBoard?(el: HTMLElement, opts: HostBoardOptions): HostBoardHandle
     boardToSvg?(scene: HostBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<{ svg: SVGSVGElement; x: number; y: number; width: number; height: number } | null>
     mountSelectionBar?(root: HTMLElement, opts?: {

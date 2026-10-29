@@ -265,5 +265,37 @@ await t('选区几何:同一行的碎块并成一条,分栏不连', async () => 
   A.deepEqual(r.map((x) => [x.left, x.right, x.top]), [[0, 90, 0], [300, 340, 0], [0, 50, 20]])
 })
 
+await t('外部 PDF:关闭首个标签后,另一个标签仍能保存;最后一条评论在吊销之前落盘', async () => {
+  const { files } = fakeHost()
+  const S = await load('src/store.ts')
+  const scoped = () => {
+    let live = true
+    return { io: {
+      async readBytes(p) { A.ok(live, 'read after revoke'); return files.get(p) ?? null },
+      async writeBytes(p, bytes) { A.ok(live, 'write after revoke'); await new Promise((r) => setTimeout(r, 8)); files.set(p, bytes) },
+    }, revoke() { live = false } }
+  }
+  const one = scoped(), two = scoped(), path = '/Downloads/Paper.pdf'
+  const first = await S.acquire(path, 'external', one.io), second = await S.acquire(path, 'external', two.io)
+  A.equal(first, second)
+  await S.release(first, one.io); one.revoke()
+  const a = second.add(A1); await second.flush()
+  second.patch(a.id, { comment: 'last edit before close' })
+  await S.release(second, two.io); two.revoke()
+  A.equal(saved(files, '/Downloads/.Paper.pdf.annot.json').annots[0].comment, 'last edit before close')
+  A.equal(second.dirty, false)
+})
+
+await t('关闭和重开同拍发生:活文档不被移出共享缓存或最后保存集合', async () => {
+  fakeHost()
+  const S = await load('src/store.ts')
+  const first = await S.acquire('race.pdf', 'same')
+  const [, reopened] = await Promise.all([S.release(first), S.acquire('race.pdf', 'same')])
+  const another = await S.acquire('race.pdf', 'same')
+  A.equal(reopened, another)
+  A.equal(another.refs, 2)
+  await S.release(reopened); await S.release(another)
+})
+
 console.log(fail.length ? `\n${fail.length} 项没过:${fail.join(';')}` : '\n全部通过')
 process.exit(fail.length ? 1 : 0)
