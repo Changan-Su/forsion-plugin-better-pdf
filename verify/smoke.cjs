@@ -643,7 +643,14 @@ async function main() {
     const seq = []; for (const k of ['h', 'u', 'n', 't', 'v']) seq.push(await press(k))
     check('⑯a 字母键换工具:H 高亮、U 下划线、N 便签、T 文字、V 选择', seq.join() === 'highlight,underline,note,text,select', seq.join())
     const tip = await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').evaluate((b) => [b.title, b.getAttribute('aria-label'), b.getAttribute('aria-keyshortcuts')])
-    check('⑯a 按钮提示上写着键,读屏念的仍是名字', tip[0] === '高亮 (H)' && tip[1] === '高亮' && tip[2] === 'H', JSON.stringify(tip))
+    let tooltip = tip[0]
+    if (!tooltip) {
+      await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').hover()
+      await win.locator('.lcl-tip').waitFor({ state: 'visible', timeout: 3000 })
+      tooltip = await win.locator('.lcl-tip').last().innerText()
+      await win.mouse.move(5, 5)
+    }
+    check('⑯a 按钮提示上写着键,读屏念的仍是名字', tooltip === '高亮 (H)' && tip[1] === '高亮' && tip[2] === 'H', JSON.stringify([tooltip, ...tip.slice(1)]))
     if (inkOn) {
       const s2 = []; for (const k of ['p', 'e', 'e', 'x', 'r']) s2.push(await press(k))
       const rect = await win.locator('.pr-toolbar [data-act="shape"][data-v="rectangle"].on').count()
