@@ -125,6 +125,7 @@ async function main() {
     check('English dark theme uses host menu styling', await win.locator('html').getAttribute('data-mode') === 'dark' && (await win.locator('.ctx-menu:not([data-lcl-exit])').last().innerText()).includes('Export PDF with annotations'))
     await win.screenshot({ path: path.join(shots, 'dark-menu.png') }); await win.keyboard.press('Escape'); await pause(150)
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(900, 760))
+    await pause(700) // PDFViewer completes its width-fit resize before opening a menu.
     await more.click(); await pause(250)
     const bounds = await win.locator('.ctx-menu:not([data-lcl-exit])').last().evaluate((e) => { const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight })
     check('host menu stays inside a narrow English dark window', bounds)
