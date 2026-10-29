@@ -112,7 +112,14 @@ export class AnnotDoc {
   private warned = false
   readonly path: string
 
-  constructor(readonly pdfPath: string, fingerprint: string) {
+  private readonly sources = new Set<HostFileIO>()
+  private fallbackIO?: HostFileIO
+  private get io(): HostFileIO | undefined { return this.sources.values().next().value ?? this.fallbackIO }
+  addSource(io?: HostFileIO): void { if (io) { this.sources.add(io); this.fallbackIO = io } }
+  removeSource(io?: HostFileIO): void { if (io) this.sources.delete(io) }
+
+  constructor(readonly pdfPath: string, fingerprint: string, io?: HostFileIO) {
+    this.addSource(io)
     this.path = sidecarOf(pdfPath)
     this.data = blank(fingerprint)
   }
@@ -123,11 +130,11 @@ export class AnnotDoc {
   }
 
   async load(): Promise<void> {
-    const bytes = await ctx.app.readBytes!(this.path)
+    const bytes = await (this.io ?? ctx.app).readBytes!(this.path)
     if (!bytes) {
       // 没有旁挂文件:这份 PDF 可能是改了名 / 挪了位置,按指纹找上次的那份带过来(原处那份留着不动)。
       // 认领前核指纹:那个路径现在可能已经是别的 PDF 的批注。
-      const old = (await seenMap())[this.data.fingerprint]
+      const old = this.io ? undefined : (await seenMap())[this.data.fingerprint]
       const d = old && old !== this.path ? parse((await readText(old)) ?? '') : null
       if (d && d.fingerprint === this.data.fingerprint) { this.take(d); this.changed() } // 在新位置落一份;落成了才改记的路径(write 里)
       return
@@ -135,11 +142,11 @@ export class AnnotDoc {
     this.disk = dec.decode(bytes)
     const d = parse(this.disk)
     // ponytail: 同一路径上指纹对不上(PDF 被重新保存 / 换了一版)照样带上批注 —— 换版后批注不见了更糟;真换成了另一篇文档,位置会对不上,由用户自己删。
-    if (d) { this.take(d); void remember(this.data.fingerprint, this.path); return }
+    if (d) { this.take(d); if (!this.io) void remember(this.data.fingerprint, this.path); return }
     // 读不出来的文件绝不覆盖:原样另存一份,再从空白开始;另存不成就整份只读,原件留着不动。
     const keep = `${this.path}.broken-${Date.now()}`
     try {
-      await ctx.app.writeBytes!(keep, bytes)
+      await (this.io ?? ctx.app).writeBytes!(keep, bytes)
       ctx.notify?.(t('save.broken', { name: baseOf(keep) }), { level: 'warning' })
     } catch {
       this.readonly = true
@@ -172,7 +179,8 @@ export class AnnotDoc {
     if (!this.dirty || this.readonly) return
     try {
       // 写之前再读一遍:和上次不一样 = 别的窗口写过(或者上次没读到)→ 把那边的并进来再写,不整份盖掉。
-      const now = await readText(this.path)
+      const current = await (this.io ?? ctx.app).readBytes!(this.path)
+      const now = current ? dec.decode(current) : null
       if (now != null && now !== this.disk) {
         const theirs = parse(now)
         if (!theirs) throw new Error('盘上的批注文件现在读不出来,不覆盖')
@@ -184,10 +192,10 @@ export class AnnotDoc {
       if (now == null && isEmpty(this.data)) { this.dirty = false; return } // 没批注过的 PDF 不留空文件
       const text = JSON.stringify(this.data, null, 1)
       this.dirty = false // 写的途中再改会重新标脏
-      await ctx.app.writeBytes!(this.path, enc.encode(text))
+      await (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text))
       this.disk = text
       this.warned = false
-      void remember(this.data.fingerprint, this.path)
+      if (!this.io) void remember(this.data.fingerprint, this.path)
     } catch (e) {
       this.dirty = true
       console.error('[pdf-reader] 批注没能保存', e)
@@ -201,7 +209,7 @@ export class AnnotDoc {
     if (!this.dirty || this.readonly || (this.disk == null && isEmpty(this.data))) return
     const text = JSON.stringify(this.data, null, 1)
     this.dirty = false
-    void ctx.app.writeBytes!(this.path, enc.encode(text)).then(() => { this.disk = text }, () => { this.dirty = true })
+    void (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text)).then(() => { this.disk = text }, () => { this.dirty = true })
   }
 
   add(a: Omit<Annot, 'id' | 'created' | 'modified'>): Annot {
@@ -252,26 +260,24 @@ export class AnnotDoc {
 const open = new Map<string, Promise<AnnotDoc>>()
 const live = new Set<AnnotDoc>()
 
-export function acquire(pdfPath: string, fingerprint: string): Promise<AnnotDoc> {
+export function acquire(pdfPath: string, fingerprint: string, io?: HostFileIO): Promise<AnnotDoc> {
   let p = open.get(pdfPath)
   if (!p) {
-    p = (async () => { const d = new AnnotDoc(pdfPath, fingerprint); await d.load(); live.add(d); return d })()
+    p = (async () => { const d = new AnnotDoc(pdfPath, fingerprint, io); await d.load(); live.add(d); return d })()
     open.set(pdfPath, p)
     p.catch(() => open.delete(pdfPath))
   }
-  return p.then((d) => { d.refs++; return d })
+  return p.then((d) => { d.addSource(io); d.refs++; return d })
 }
 
-export function release(doc: AnnotDoc): void {
+export async function release(doc: AnnotDoc, io?: HostFileIO): Promise<void> {
+  await doc.flush()
+  doc.removeSource(io)
   doc.refs--
-  // 等落盘写完再放手:马上重开同一份 PDF 时,不能读到还没写完的旧文件。
-  // 放手前再核一遍:期间又被打开过、又有新改动、或者没存上的,都留着(没存上的留在内存里,重开还在)。
-  const done = (): void => void open.get(doc.pdfPath)?.then((d) => {
-    if (d !== doc || doc.refs > 0 || doc.dirty) return
-    open.delete(doc.pdfPath)
-    live.delete(doc)
-  })
-  void doc.flush().then(done, done)
+  const current = await open.get(doc.pdfPath)
+  if (current !== doc || doc.refs > 0 || doc.dirty) return
+  open.delete(doc.pdfPath)
+  live.delete(doc)
 }
 
 /** 窗口退到后面:不等 0.4 秒,现在就写(照常先读一遍、有别的窗口写过就合并)。 */

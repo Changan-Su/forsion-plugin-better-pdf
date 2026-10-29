@@ -40,12 +40,14 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
     id: 'pdf',
     extensions: ['.pdf'],
     override: true,
+    external: true,
     title: 'PDF',
     mount(el, file) {
       injectCss()
-      const off = mountReader(el, file.filePath, file.onGoto)
-      // 这一程第一次打开 PDF 时把右栏的三个视图开出来;之后用户关了就不再自作主张(工具栏上有按钮)。
-      if (!opened && hasRight(el)) { opened = true; openPanel('annots', el) }
+      const off = mountReader(el, file.filePath.replace(/\\/g, '/'), file.onGoto, file.io, () => {
+        // Wait until the Main view and document exist before requesting companions.
+        if (!opened && hasRight(el)) { opened = true; openPanel('annots', el) }
+      })
       return off
     },
   })

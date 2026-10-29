@@ -177,6 +177,7 @@ async function main() {
     // ① 接管:是我们的阅读器,不是内置的
     check('① 点开 PDF 由插件打开', await win.locator('.pr-root .pdfViewer .page').count() === 3 && await win.locator('.amx-pdfview').count() === 0)
     check('① 刚装好没有任何批注', readSidecar() === null && await win.locator('.pr-marks > *').count() === 0)
+    await win.locator('.pr-listhead').waitFor({ state: 'attached', timeout: 8000 }).catch(() => {})
     const tabs = await win.locator('[data-pdfmock], .pr-panel').count()
     check('① 右栏开出了批注列表', tabs >= 1 && await win.locator('.pr-listhead').count() === 1)
     hasInk = await win.locator('.pr-toolbar [data-act="tool"][data-v="ink"]').count() === 1
@@ -576,7 +577,7 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, '4-overview.png') })
 
     // ⑨ 导出带批注的 PDF
-    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"]').click()
+    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"], .ctx-menu button:has-text("导出带批注的 PDF")').click()
     const findExport = () => fs.readdirSync(path.join(vault, FOLDER)).find((f) => f.startsWith('Reading Fixture') && f !== PDF && f.endsWith('.pdf'))
     await until(findExport, 10_000); await win.waitForTimeout(400)
     const exported = findExport()
@@ -587,7 +588,7 @@ async function main() {
     // ⑨b 再导出一次:不覆盖上一份,另起一个编号的名字
     const origRow = () => win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: PDF }) }).first()
     await origRow().click(); await win.waitForSelector('.pr-hl', { timeout: 15_000 }); await win.waitForTimeout(600)
-    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"]').click()
+    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"], .ctx-menu button:has-text("导出带批注的 PDF")').click()
     const exportsNow = () => fs.readdirSync(path.join(vault, FOLDER)).filter((f) => f.startsWith('Reading Fixture') && f !== PDF && f.endsWith('.pdf'))
     await until(() => exportsNow().length === 2, 10_000)
     check('⑨b 再导出一次不覆盖上一份', exportsNow().length === 2 && !!exported && Buffer.compare(exBytes, fs.readFileSync(path.join(vault, FOLDER, exported))) === 0, exportsNow().join(' | '))
@@ -642,7 +643,14 @@ async function main() {
     const seq = []; for (const k of ['h', 'u', 'n', 't', 'v']) seq.push(await press(k))
     check('⑯a 字母键换工具:H 高亮、U 下划线、N 便签、T 文字、V 选择', seq.join() === 'highlight,underline,note,text,select', seq.join())
     const tip = await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').evaluate((b) => [b.title, b.getAttribute('aria-label'), b.getAttribute('aria-keyshortcuts')])
-    check('⑯a 按钮提示上写着键,读屏念的仍是名字', tip[0] === '高亮 (H)' && tip[1] === '高亮' && tip[2] === 'H', JSON.stringify(tip))
+    let tooltip = tip[0]
+    if (!tooltip) {
+      await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').hover()
+      await win.locator('.lcl-tip').waitFor({ state: 'visible', timeout: 3000 })
+      tooltip = await win.locator('.lcl-tip').last().innerText()
+      await win.mouse.move(5, 5)
+    }
+    check('⑯a 按钮提示上写着键,读屏念的仍是名字', tooltip === '高亮 (H)' && tip[1] === '高亮' && tip[2] === 'H', JSON.stringify([tooltip, ...tip.slice(1)]))
     if (inkOn) {
       const s2 = []; for (const k of ['p', 'e', 'e', 'x', 'r']) s2.push(await press(k))
       const rect = await win.locator('.pr-toolbar [data-act="shape"][data-v="rectangle"].on').count()

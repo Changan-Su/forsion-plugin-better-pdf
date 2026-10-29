@@ -8,7 +8,8 @@
     "build": "node build.mjs",
     "check": "node check.mjs",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm run build && npm run check"
+    "verify": "npm run typecheck && npm run build && npm run check",
+    "check:external": "node verify/external-motion.cjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",

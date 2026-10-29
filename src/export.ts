@@ -103,7 +103,7 @@ const isHighlighter = (e: any): boolean => !!e?.customData?.strokeOptions?.highl
 export async function exportAnnotated(r: Reader): Promise<void> {
   if (!r.doc || !r.pdf) return
   try {
-    const bytes = await ctx.app.readBytes!(r.pdfPath)
+    const bytes = await r.fileIO.readBytes(r.pdfPath)
     if (!bytes) throw new Error('unreadable')
     const doc = await PDFDocument.load(bytes, { updateMetadata: false })
     const pages = doc.getPageCount()
@@ -123,7 +123,12 @@ export async function exportAnnotated(r: Reader): Promise<void> {
     const taken = new Set(((await ctx.app.listFiles?.().catch(() => null)) ?? []).map((p) => p.toLowerCase()))
     let name = `${stem}.pdf`
     for (let n = 2; taken.has(at(name).toLowerCase()); n++) name = `${stem} ${n}.pdf`
-    await ctx.app.writeBytes!(at(name), await doc.save({ useObjectStreams: false }))
+    const output = await doc.save({ useObjectStreams: false })
+    if (r.fileIO.saveCopy) {
+      const saved = await r.fileIO.saveCopy(name, output)
+      if (!saved) return
+      name = saved
+    } else await ctx.app.writeBytes!(at(name), output)
     ctx.notify?.(t('export.done', { name }), { level: 'success' })
   } catch (e) {
     console.error('[pdf-reader] 导出失败', e)

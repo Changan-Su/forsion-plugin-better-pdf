@@ -5,6 +5,7 @@ import { acquire, release, baseOf, dirOf, type Annot, type AnnotDoc, type AnnotT
 import { pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
 import { icon } from './icons'
 import { t } from './i18n'
+import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
 
@@ -130,11 +131,14 @@ export class Reader {
   private redoCut = false
   private color = COLORS[0]
   private dead = false
+  private loading: Promise<void> = Promise.resolve()
   private readonly subs = new Set<() => void>()
   private readonly layers = new Map<number, HTMLElement>()
   private readonly mo: MutationObserver
   private readonly off: (() => void)[] = []
   private pop: HTMLElement | null = null
+  private hostPop: { dispose(): void } | null = null
+  private hostMenu: (() => void) | null = null
   /** 宿主的划线条(新宿主才有);没有就照旧自己画浮条 .pr-selpop。 */
   private readonly bar: HostSelectionBarHandle | null
   private barShown = false
@@ -151,7 +155,7 @@ export class Reader {
   private quoteFind = false
   readonly ink: InkLayer | null
 
-  constructor(host: HTMLElement, readonly pdfPath: string) {
+  constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO) {
     this.root = el(`<div class="pr-root">
       <div class="pr-toolbar"></div>
       <div class="pr-findbar" hidden></div>
@@ -202,10 +206,13 @@ export class Reader {
     this.renderFindbar()
     this.setState('loading')
     this.bind()
+    this.off.push(tooltips(this.root))
     readers.add(this)
     setActive(this)
-    void this.load()
+    this.loading = this.load()
   }
+
+  get fileIO(): HostFileIO { return this.io ?? ctx.app as HostFileIO }
 
   private q<T extends HTMLElement = HTMLElement>(sel: string): T { return this.root.querySelector(sel) as T }
 
@@ -230,15 +237,15 @@ export class Reader {
   private async load(): Promise<void> {
     this.setState('loading')
     try {
-      const bytes = await ctx.app.readBytes!(this.pdfPath)
+      const bytes = await (this.io ?? ctx.app).readBytes!(this.pdfPath)
       if (!bytes) throw new Error('unreadable')
       // slice:pdf.js 会把缓冲区转移进 worker。
       // ponytail: 没配 cMap / 标准字体(和内置阅读器一样),极少数老式中日韩 PDF 的字会缺;真遇到再随包带。
       const pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise
       if (this.dead) { void pdf.destroy(); return }
       this.pdf = pdf
-      const doc = await acquire(this.pdfPath, pdf.fingerprints?.[0] ?? '')
-      if (this.dead) { release(doc); return }
+      const doc = await acquire(this.pdfPath, pdf.fingerprints?.[0] ?? '', this.io)
+      if (this.dead) { await release(doc, this.io); return }
       this.doc = doc
       this.off.push(doc.subscribe(() => { this.repaint(); this.ink?.onDocChanged(); this.emit() }))
       this.viewer.setDocument(pdf)
@@ -272,7 +279,7 @@ export class Reader {
     // ⌘/Ctrl + 滚轮、触控板捏合(= 带 ctrlKey 的滚轮)缩放,以光标为中心。pdf.js 的组件包不带这一手。
     on(container, 'wheel', (ev: WheelEvent) => this.onWheel(ev), { passive: false })
     // 划线条是按当时的位置摆在视口上的:页面一滚就不在选区旁边了。
-    on(container, 'scroll', () => { this.ink?.onScroll(); this.hideBar() }, { passive: true })
+    on(container, 'scroll', () => { this.ink?.onScroll(); this.closePop() }, { passive: true })
     on(container, 'pointerdown', (ev: PointerEvent) => { this.downInPage = ev.pointerId; this.onDown(ev) })
     on(container, 'pointerup', (ev: PointerEvent) => {
       const fromPage = !this.bar || this.downInPage === ev.pointerId
@@ -307,13 +314,7 @@ export class Reader {
     on(window, 'pointercancel', (ev: PointerEvent) => this.onPressUp(ev), { capture: true })
     on(document, 'selectionchange', () => this.onSelChange())
     on(this.root, 'click', (ev: MouseEvent) => this.onAct(ev))
-    on(this.root, 'change', (ev: Event) => {
-      const i = ev.target as HTMLInputElement
-      if (!i.matches?.('input[type="color"][data-color]')) return
-      const c = i.value.toLowerCase()
-      remember(c)
-      if (i.dataset.color === 'ink-color') { this.ink?.setColor(c); this.renderToolbar() } else this.pickColor(c, i)
-    })
+    on(this.root, 'change', (ev: Event) => this.onColor(ev))
 
     const ro = new ResizeObserver(() => {
       this.hideBar() // 切走标签页、拖分栏:条不跟着这个视图藏起来 / 挪走
@@ -350,12 +351,20 @@ export class Reader {
   }
 
   /** 工具栏、浮条、批注卡、底栏上带 data-act 的按钮都从这里走。 */
+  private onColor(ev: Event): void {
+      const i = ev.target as HTMLInputElement
+      if (!i.matches?.('input[type="color"][data-color]')) return
+      const c = i.value.toLowerCase()
+      remember(c)
+      if (i.dataset.color === 'ink-color') { this.ink?.setColor(c); this.renderToolbar() } else this.pickColor(c, i)
+      }
+
   private onAct(ev: MouseEvent): void {
     const b = (ev.target as HTMLElement).closest<HTMLElement>('[data-act]')
-    if (!b || !this.root.contains(b)) return
+    if (!b || (!this.root.contains(b) && !this.pop?.contains(b))) return
     const v = b.dataset.v ?? ''
     switch (b.dataset.act) {
-      case 'retry': void this.load(); break
+      case 'retry': this.loading = this.load(); break
       case 'tool': this.setTool(v as Tool); break
       case 'color': this.pickColor(v, b); break
       case 'thumbs': this.toggleThumbs(); break
@@ -393,6 +402,7 @@ export class Reader {
     const mid = inking ? this.ink!.toolbarHtml(btn, sep) : this.dotsHtml(this.color, 'color')
     // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
+    const hadPalette = !!this.q('.pr-palette')
     const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
     // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
     bar.innerHTML =
@@ -400,6 +410,7 @@ export class Reader {
       `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
+    if (inking && this.tool !== 'eraser' && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
     if (had) (bar.querySelector<HTMLElement>(`[data-act="${f!.dataset.act}"][data-v="${f!.dataset.v ?? ''}"]`) ?? this.container).focus({ preventScroll: true })
   }
 
@@ -857,11 +868,12 @@ export class Reader {
     this.select(id)
   }
 
-  private anchorOf(id: string): { left: number; top: number; bottom: number } | null {
+  private anchorOf(id: string): { left: number; top: number; bottom: number; element: HTMLElement } | null {
     const els = [...this.container.querySelectorAll<HTMLElement>(`[data-a="${id}"]`)]
     if (!els.length) return null
-    const r = els[els.length - 1].getBoundingClientRect()
-    return { left: r.left, top: r.top, bottom: r.bottom }
+    const element = els[els.length - 1]
+    const r = element.getBoundingClientRect()
+    return { left: r.left, top: r.top, bottom: r.bottom, element }
   }
 
   private openCard(id: string, focus: boolean): void {
@@ -908,6 +920,7 @@ export class Reader {
         input.addEventListener('blur', () => done(true))
       }
     })
+    if (focus) pop.dataset.autofocus = ''
     this.showPop(pop, anchor, 'below')
     grow()
     if (focus) body.focus()
@@ -915,8 +928,29 @@ export class Reader {
 
   // ── 浮层 ────────────────────────────────────────────────────────────────────────
   /** 浮层放进滚动容器里(跟着页面滚),位置由客户区坐标换成容器内容坐标;客户区像素先除掉界面的整体缩放。 */
-  private showPop(pop: HTMLElement, a: { left: number; top: number; bottom: number }, prefer: 'above' | 'below'): void {
+  private showPop(pop: HTMLElement, a: { left: number; top: number; bottom: number; element?: HTMLElement }, prefer: 'above' | 'below'): void {
     this.closePop()
+    if (ctx.ui?.popover && a.element) {
+      this.pop = pop
+      pop.dataset.hosted = ''
+      pop.addEventListener('click', (e) => this.onAct(e))
+      pop.addEventListener('change', (e) => this.onColor(e))
+      // Annotation marks are repainted while comments change. Keep a stable,
+      // inert anchor outside the marks so typing cannot move the host card to (0, 0).
+      const marker = document.createElement('span')
+      marker.className = 'pr-popanchor'
+      marker.setAttribute('aria-hidden', 'true')
+      const cr = this.container.getBoundingClientRect(), z = cr.width / this.container.offsetWidth
+      Object.assign(marker.style, { position: 'absolute', pointerEvents: 'none', left: `${(a.left - cr.left) / z + this.container.scrollLeft}px`, top: `${(a.top - cr.top) / z + this.container.scrollTop}px`, width: '1px', height: `${(a.bottom - a.top) / z}px` })
+      this.container.append(marker)
+      this.hostPop = ctx.ui.popover(marker, {
+        side: prefer === 'above' ? 'top' : 'bottom',
+        label: t('view.annots'),
+        mount: (host) => { host.append(pop); const off = tooltips(pop); queueMicrotask(() => { if (this.pop === pop && pop.isConnected && pop.hasAttribute('data-autofocus')) pop.querySelector('textarea')?.focus({ preventScroll: true }) }); return () => { off(); marker.remove() } },
+        onClose: () => { if (this.pop === pop) { this.pop = null; this.hostPop = null; if (!this.dead) this.container.focus({ preventScroll: true }) } },
+      })
+      return
+    }
     const c = this.container, cr = c.getBoundingClientRect()
     const z = c.offsetWidth ? cr.width / c.offsetWidth : 1
     c.append(pop)
@@ -933,12 +967,23 @@ export class Reader {
   closePop(): void {
     this.hideBar()
     const had = this.pop?.contains(document.activeElement)
+    this.hostMenu?.(); this.hostMenu = null
+    this.hostPop?.dispose(); this.hostPop = null
     this.pop?.remove()
     this.pop = null
     if (had && !this.dead) this.container.focus({ preventScroll: true }) // 焦点原来在浮层里:还给页面,不然删除 / 撤销这些按键没人听
   }
 
   private openMore(anchorBtn: HTMLElement): void {
+    if (this.hostMenu) { this.closePop(); return }
+    if (ctx.ui?.contextMenu) {
+      this.closePop()
+      this.hostMenu = ctx.ui.contextMenu({ anchor: anchorBtn, align: 'end' }, [
+        { label: t('more.export'), icon: 'download', run: () => { void exportAnnotated(this) } },
+        { label: t('more.copyLink'), icon: 'link', run: () => { void navigator.clipboard?.writeText(`[[${baseOf(this.pdfPath)}#page=${this.page}]]`); ctx.notify?.(t('copy.done')) } },
+      ], { onClose: () => { this.hostMenu = null } })
+      return
+    }
     if (this.pop?.dataset.kind === 'menu') { this.closePop(); return }
     const r = anchorBtn.getBoundingClientRect()
     const pop = el(`<div class="pr-pop pr-menu" data-kind="menu">
@@ -999,6 +1044,7 @@ export class Reader {
 
   private toggleFind(open: boolean): void {
     const bar = this.q('.pr-findbar')
+    if (open) bar.dataset.motion = 'enter'
     bar.hidden = !open
     if (open) { const i = bar.querySelector('input')!; i.focus(); i.select() }
     else { this.eventBus.dispatch('findbarclose', { source: this }); this.container.focus({ preventScroll: true }) }
@@ -1051,6 +1097,7 @@ export class Reader {
   // ── 缩略图 ──────────────────────────────────────────────────────────────────────
   private toggleThumbs(): void {
     const side = this.q('.pr-side')
+    side.dataset.motion = 'enter'
     side.hidden = !side.hidden
     this.renderToolbar()
     if (side.hidden || this.thumbsBuilt || !this.pdf) { this.syncThumbs(); return }
@@ -1125,20 +1172,22 @@ export class Reader {
     this.repaint()
   }
 
-  dispose(): void {
-    if (this.dead) return
+  dispose(): Promise<void> {
+    if (this.dead) return Promise.resolve()
     this.dead = true
+    this.closePop()
     // 页面上正打着字的文字框:先收进数据再走。
     this.commitText(document.activeElement as HTMLElement | null)
     this.ink?.dispose()
     for (const f of this.off) { try { f() } catch { /* 收尾不抛 */ } }
     this.mo.disconnect()
-    if (this.doc) release(this.doc)
+    const saved = this.doc ? release(this.doc, this.io) : this.loading
     try { this.viewer.setDocument(null); this.linkService.setDocument(null) } catch { /* 忽略 */ }
     try { void this.pdf?.destroy() } catch { /* 忽略 */ }
     this.root.remove()
     readers.delete(this)
     if (active === this) setActive([...readers].pop() ?? null)
+    return saved
   }
 
   /** 窗口要关 / 插件要停:把还在手上的东西(正打着的字、最后一笔)收进数据。 */
@@ -1158,10 +1207,12 @@ export class Reader {
 }
 
 /** 文字框的失焦要在捕获阶段听(focusout 冒泡,但我们要在重画之前拿到内容)。 */
-export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto): () => void {
-  const r = new Reader(host, pdfPath)
+export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: () => void): () => Promise<void> {
+  const r = new Reader(host, pdfPath, io)
+  let ready = false
+  const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; onReady?.() } })
   const onOut = (e: FocusEvent): void => r.commitText(e.target as HTMLElement)
   r.root.addEventListener('focusout', onOut)
   const offGoto = onGoto?.((to) => r.goto(to.page, to.quote))
-  return () => { offGoto?.(); r.root.removeEventListener('focusout', onOut); r.dispose() }
+  return () => { offReady(); offGoto?.(); r.root.removeEventListener('focusout', onOut); return r.dispose() }
 }
