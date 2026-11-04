@@ -8,15 +8,18 @@ import { t } from './i18n'
 import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
+import { buildOutline, currentIndex, type Toc } from './outline'
 
 export const COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5']
-type Tool = 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
+type Tool = 'hand' | 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
 const TOOLS: [Tool, string][] = [
-  ['select', 'mouse-pointer-2'], ['highlight', 'highlighter'], ['underline', 'underline'], ['note', 'sticky-note'],
+  ['hand', 'hand'], ['select', 'mouse-pointer-2'], ['highlight', 'highlighter'], ['underline', 'underline'], ['note', 'sticky-note'],
   ['text', 'type'], ['shape', 'shapes'], ['ink', 'pen-line'], ['eraser', 'eraser'],
 ]
 /** 归白板层的三个工具:宿主没有白板层接口时不出现。 */
 const BOARD_TOOLS: Tool[] = ['shape', 'ink', 'eraser']
+/** 用得上「颜色」的工具:只有拿着它们时工具栏才出色点(选择、抓手、橡皮下点了色点什么都不变)。 */
+const COLOR_TOOLS: Tool[] = ['highlight', 'underline', 'note', 'text']
 /** 工具的字母键,照宿主白板的来(V 选择、P / X 笔、E 橡皮、R O A L 四种形状、T 文字);高亮、下划线、便签是我们自己的,另取 H U N。
  *  白板层的工具由我们定死,引擎因此不认它自己的快捷键,得我们来接。数字键另算:按工具栏上的顺序,0 也是橡皮。 */
 const KEY_TOOL: Record<string, [Tool, HostBoardShape?]> = {
@@ -94,15 +97,36 @@ let panelOpened = false
  *  ① 标签移到新窗口后的那个窗口 —— 三个面板没处放,开进主区会把 PDF 这个标签顶掉,面板自己也因为没有阅读器是空的;
  *  ② 阅读器开在对话旁边那一格里(聊天里点引用、Agent 把 PDF 摆上台)—— 右栏一开,那一格就被顶掉,PDF 反而看不见了。
  *  ponytail: ② 认的是宿主那一格的类名 .agent-desk(已发布的宿主上没有别的办法知道);宿主给出正式的「我在哪种容器里」之后换掉。 */
+const SIDE_KEY = 'pdf-reader.side-tab'
+let lastSideTab: 'toc' | 'thumbs' = 'toc'
+try { if (localStorage.getItem(SIDE_KEY) === 'thumbs') lastSideTab = 'thumbs' } catch { /* 读不出来就用目录 */ }
+/** 一个元素在滚动层里的纵向位置(offsetTop 一路加到 root;不受界面缩放影响)。 */
+const offsetIn = (el: HTMLElement, root: HTMLElement): number => {
+  let y = 0
+  for (let n: HTMLElement | null = el; n && n !== root; n = n.offsetParent as HTMLElement | null) y += n.offsetTop
+  return y
+}
+const reduced = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches
 export const hasRight = (at?: Element | null): boolean => !!ctx.viewLocations?.includes('right') && !at?.closest('.agent-desk')
-/** 把批注 / 大纲 / 对话开进右栏;没有右栏的地方什么都不做(对应的按钮也不出现)。 */
+/** 把批注 / 对话开进右栏;没有右栏的地方什么都不做(对应的按钮也不出现)。目录在左边那栏(11-03 用户定),
+ *  右栏的「大纲」视图还注册着(开着它的布局照旧能用),只是不再自动开出来。 */
 export function openPanel(id: 'annots' | 'outline' | 'chat' = 'annots', at?: Element | null): void {
   if (!hasRight(at)) return
   const open = (v: string): void => ctx.openView(v, { location: 'right' })
-  // 第一次:三个标签按「批注 / 大纲 / 对话」的顺序开出来,再回到要看的那个。
-  if (!panelOpened) { open('annots'); open('outline'); if (ctx.tangu?.mountChat) open('chat') }
+  // 第一次:两个标签按「批注 / 对话」的顺序开出来,再回到要看的那个。
+  if (!panelOpened) { open('annots'); if (ctx.tangu?.mountChat) open('chat') }
   panelOpened = true
   open(id)
+}
+
+/** 目录列表(左栏和右栏的「大纲」共用):一条一颗按钮,按级缩进;自动整理出来的在底下注明来源。 */
+export function tocHtml(toc: Toc | null): string {
+  if (!toc) return `<div class="pr-tocmsg">${esc(t('outline.building'))}</div>`
+  if (!toc.items.length) return `<div class="pr-tocmsg">${esc(t('outline.empty'))}</div>`
+  const note = toc.source === 'contents' ? t('outline.fromContents', { n: (toc.contentsPage ?? 0) + 1 }) : toc.source === 'fonts' ? t('outline.fromFonts') : ''
+  return `<div class="pr-toclist">${toc.items.map((it, i) =>
+    `<button class="pr-tocitem" data-act="toc" data-v="${i}" style="--l:${Math.min(it.level, 3)}" title="${esc(it.title)}">${esc(it.title || t('outline.untitled'))}</button>`).join('')}</div>` +
+    (note ? `<div class="pr-tocnote">${esc(note)}</div>` : '')
 }
 
 export class Reader {
@@ -121,6 +145,11 @@ export class Reader {
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
   private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; hit: string | null; shift: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
   /** 落在白板层上、被我们拿来滚页面的那根手指(far = 离落点最远到过多远:没怎么动就是一次轻点)。 */
+  /** 抓手拖动中(抓手工具、按住空格、中键):按下时的位置和滚动位置。 */
+  private pan: { id: number; x: number; y: number; sl: number; st: number; far: number } | null = null
+  /** 空格按着:任何工具下临时当抓手,松开回原工具(白板的规矩)。 */
+  private spaceHeld = false
+  private panEnd = 0
   private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number } | null = null
   /** 笔尖正按在页面上(这时落下来的多半是手掌,不拿它滚页面)。 */
   private penDown = false
@@ -148,6 +177,14 @@ export class Reader {
   private pendingPick: { pages: PageQuads[]; text: string } | null = null
   private justMade = 0
   private thumbsBuilt = false
+  /** 工具岛上那块高亮底现在停在哪(px);换工具时从这里滑过去。 */
+  private indX: number | null = null
+  /** 目录(打开后现算,见 outline.ts);null = 还在算。 */
+  toc: Toc | null = null
+  private tocStarted = false
+  private tocAt = -1
+  private sideTab = lastSideTab
+  private ftoc: { refresh(): void; dispose(): void } | null = null
   private pendingGoto: { page: number; quote?: string } | null = null
   /** 容器当前有尺寸、且页面已经按这个尺寸排过(由 ResizeObserver 维护)。 */
   private sized = false
@@ -156,16 +193,18 @@ export class Reader {
   readonly ink: InkLayer | null
 
   constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO) {
+    // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
+    // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
     this.root = el(`<div class="pr-root">
-      <div class="pr-toolbar"></div>
-      <div class="pr-findbar" hidden></div>
       <div class="pr-body">
-        <div class="pr-side" hidden><div class="pr-thumbs"></div></div>
+        <div class="pr-side" hidden><div class="pr-sidetabs" role="tablist"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
-          <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div></div>
+          <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div><div class="pr-anchors"></div></div>
           <div class="pr-board"></div>
-          <div class="pr-bottombar" hidden></div>
           <div class="pr-state"></div>
+          <div class="pr-toolbar"></div>
+          <div class="pr-findbar pr-isle" hidden></div>
+          <div class="pr-bottombar" hidden></div>
         </div>
       </div>
     </div>`)
@@ -270,9 +309,14 @@ export class Reader {
       this.off.push(() => target.removeEventListener(type, fn, opts))
     }
     eventBus.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; this.flushGoto() })
-    eventBus.on('pagerendered', (e: { pageNumber: number }) => { this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1) })
+    eventBus.on('pagerendered', (e: { pageNumber: number }) => {
+      this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1)
+      // 目录等第一页画出来再算:读字和画页走同一个 worker,先算会把第一屏拖慢。
+      if (!this.tocStarted) { this.tocStarted = true; setTimeout(() => this.loadToc(), 0) }
+    })
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
-    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport() })
+    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport(); this.placeAnchors() })
+    eventBus.on('updateviewarea', (e: any) => this.syncToc(e.location?.pageNumber, e.location?.top))
     eventBus.on('updatefindmatchescount', (e: any) => this.syncFind(e.matchesCount))
     eventBus.on('updatefindcontrolstate', (e: any) => this.syncFind(e.matchesCount, e.state))
 
@@ -306,6 +350,14 @@ export class Reader {
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKey(ev))
     // 捕获阶段:白板引擎的键盘处理挂在它自己的容器上,删除 / 撤销要赶在它前面看到。
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKeyFirst(ev), { capture: true })
+    // 空格松开可能已经不在这个阅读器里(焦点挪走了),在 window 上收;窗口失焦也收,免得卡在抓手上。
+    on(window, 'keyup', (ev: KeyboardEvent) => { if (ev.key === ' ') this.setSpace(false) }, { capture: true })
+    on(window, 'blur', () => this.setSpace(false))
+    // 中键在 Windows / Linux 上默认是自动滚动、在链接上是新标签打开:我们拿它拖页面,两样都拦下。
+    on(this.q('.pr-viewport'), 'mousedown', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
+    on(this.q('.pr-viewport'), 'auxclick', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
+    // 拖页面是从 PDF 里的链接上开始的:松手那一下浏览器照样补一个 click,pdf.js 会跟着跳走。拖过了就吞掉它。
+    on(this.q('.pr-viewport'), 'click', (ev: MouseEvent) => { if (performance.now() - this.panEnd < 400) { ev.preventDefault(); ev.stopPropagation() } }, { capture: true })
     // 白板层盖在页面上面,指针落在它身上时容器听不到:这几个在外层的捕获阶段听。
     const vp = this.q('.pr-viewport')
     on(vp, 'pointerdown', (ev: PointerEvent) => this.onPressDown(ev), { capture: true })
@@ -319,6 +371,9 @@ export class Reader {
     const ro = new ResizeObserver(() => {
       this.hideBar() // 切走标签页、拖分栏:条不跟着这个视图藏起来 / 挪走
       this.sized = container.clientHeight > 0
+      // 窄处(对话旁那一格、分栏)工具岛挪到底下停靠,翻页挪到顶上居中,缩放收起(⌘ + 滚轮照样能缩)。
+      if (container.clientWidth > 0) { if (container.clientWidth < 660) this.root.dataset.w = 'dock'; else delete this.root.dataset.w }
+      if (this.sized) this.slideInd()
       if (this.dead || !this.pdf) return
       const cur = viewer.currentScaleValue
       if (cur === 'page-width' || cur === 'page-fit') viewer.currentScaleValue = cur
@@ -367,7 +422,9 @@ export class Reader {
       case 'retry': this.loading = this.load(); break
       case 'tool': this.setTool(v as Tool); break
       case 'color': this.pickColor(v, b); break
-      case 'thumbs': this.toggleThumbs(); break
+      case 'side': this.toggleSide(); break
+      case 'side-tab': this.setSideTab(v as 'toc' | 'thumbs'); break
+      case 'toc': this.gotoToc(Number(v)); break
       case 'find': this.toggleFind(this.q('.pr-findbar').hidden); break
       case 'find-prev': this.find(true, true); break
       case 'find-next': this.find(true, false); break
@@ -397,21 +454,48 @@ export class Reader {
       return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
     }
     const sep = '<span class="pr-sep"></span>'
-    const tools = this.tools().map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k, k)).join('')
+    // 工具岛:抓手 | 选择 | 划线、便签、文字 | 形状、手写、橡皮,一组一道隔线;按钮角上印着它的字母键。
+    const group = (k: Tool): number => (k === 'hand' ? 0 : k === 'select' ? 1 : BOARD_TOOLS.includes(k) ? 3 : 2)
+    let last = -1
+    const tools = this.tools().map(([k, ic]) => {
+      const g = group(k), cut = last >= 0 && g !== last ? sep : ''
+      last = g
+      return cut + btn('tool', ic, t(`tool.${k}`), this.tool === k || (k === 'hand' && this.spaceHeld), k).replace('</button>', TOOL_KEY[k] ? `<i class="pr-key">${TOOL_KEY[k]}</i></button>` : '</button>')
+    }).join('')
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
-    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : this.dotsHtml(this.color, 'color')
+    // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
+    // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
+    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? this.dotsHtml(this.color, 'color') : ''
     // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
     const hadPalette = !!this.q('.pr-palette')
     const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
-    // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
+    // 「下一笔」的那一排(色点,或手写 / 形状的笔、颜色、粗细、撤销)浮在工具岛下面(pr-palette),不挤工具岛:换工具时岛不变宽、页面不跳。
     bar.innerHTML =
-      `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
-      `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` +
-      `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
-      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
-    if (inking && this.tool !== 'eraser' && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
+      `<span class="pr-group pr-isle pr-sidecap">${btn('side', 'panel-left', t('tool.side'), !this.q('.pr-side').hidden)}</span>` +
+      `<span class="pr-group pr-isle pr-tools"><span class="pr-ind"></span>${tools}</span>` +
+      `<span class="pr-group pr-isle pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
+      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>` +
+      (mid ? `<span class="pr-group pr-isle pr-palette">${mid}</span>` : '')
+    if (mid && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
+    this.slideInd()
     if (had) (bar.querySelector<HTMLElement>(`[data-act="${f!.dataset.act}"][data-v="${f!.dataset.v ?? ''}"]`) ?? this.container).focus({ preventScroll: true })
+  }
+
+  /** 工具岛上的高亮底:停在手上那件工具下面;换了工具就从上一个位置滑过去(整条是重画的,所以位置自己记着)。 */
+  private slideInd(): void {
+    const isle = this.q('.pr-tools'), ind = isle.querySelector<HTMLElement>('.pr-ind')!
+    const on = isle.querySelector<HTMLElement>(`.pr-tool[data-v="${this.spaceHeld ? 'hand' : this.tool}"]`)
+    if (!on || !on.offsetWidth) { ind.hidden = true; return }
+    const x = on.offsetLeft
+    ind.style.width = `${on.offsetWidth}px`
+    if (this.indX != null && this.indX !== x && !reduced()) {
+      ind.style.transform = `translateX(${this.indX}px)`
+      void ind.offsetWidth
+      ind.style.transition = 'transform var(--pill-select-duration, 200ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1))'
+    }
+    ind.style.transform = `translateX(${x}px)`
+    this.indX = x
   }
 
   /** 一排色点:固定的几种,后面跟着自己挑过的(最近三种;这条批注正用着的不在里面也补上),最后一颗是取色器,什么颜色都行。 */
@@ -424,6 +508,14 @@ export class Reader {
   }
 
   private tools(): [Tool, string][] { return TOOLS.filter(([k]) => this.ink || !BOARD_TOOLS.includes(k)) }
+
+  /** 空格按下 / 松开。松开时正拖着的那一下照常拖完(pan 自己在抬起时收)。 */
+  private setSpace(on: boolean): void {
+    if (this.spaceHeld === on) return
+    this.spaceHeld = on
+    this.root.toggleAttribute('data-grab', on)
+    this.renderToolbar()
+  }
 
   /** 橡皮和上一个工具来回换(E 键、手写笔模式下手指连点两下):白板的规矩。 */
   private toggleEraser(): void { this.setTool(this.tool === 'eraser' ? this.beforeEraser : 'eraser') }
@@ -531,6 +623,17 @@ export class Reader {
 
   // ── 一次按下到抬起:手写笔模式、橡皮擦批注、点选 / 框选、记撤销 ─────────────────────────
   private onPressDown(ev: PointerEvent): void {
+    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar')) return // 浮在页面上的几块不是页面
+    // 抓手:中键随时都是;抓手工具和按住空格时左键也是。按钮、浮层、输入框照常点。
+    // 在视口的捕获阶段拦下,页面(选字、便签)和白板层(画)都收不到这一下。
+    const grab = ev.button === 1 || (ev.button === 0 && (this.tool === 'hand' || this.spaceHeld))
+    if (grab && !this.pan && !inPop(ev) && !(ev.target as HTMLElement).closest('button, input, select, label, textarea, [contenteditable], .pr-bottombar, .pr-palette')) {
+      ev.preventDefault(); ev.stopPropagation()
+      this.pan = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, sl: this.container.scrollLeft, st: this.container.scrollTop, far: 0 }
+      this.root.dataset.panning = ''
+      this.closePop(); this.hideBar()
+      return
+    }
     if (ev.pointerType === 'pen') { this.penDown = true; penSeen = true; if (!penMode) setPenMode(true); else if (!this.q('[data-act="penmode"]')) this.renderToolbar() }
     const onBoard = !!this.ink?.owns(ev.target)
     // 手指落在白板层上,而这一下不该是「画」:手写笔模式开着(手指从不画),或者是选择工具
@@ -562,6 +665,15 @@ export class Reader {
   }
 
   private onPressMove(ev: PointerEvent): void {
+    const g = this.pan
+    if (g && ev.pointerId === g.id) {
+      ev.stopPropagation()
+      const c = this.container, z = c.offsetWidth ? c.getBoundingClientRect().width / c.offsetWidth : 1 // 界面缩放下指针挪 1 像素 ≠ 滚 1 像素
+      c.scrollLeft = g.sl - (ev.clientX - g.x) / z
+      c.scrollTop = g.st - (ev.clientY - g.y) / z
+      g.far = Math.max(g.far, Math.hypot(ev.clientX - g.x, ev.clientY - g.y))
+      return
+    }
     const f = this.finger
     if (f && ev.pointerType === 'touch') {
       ev.stopPropagation()
@@ -579,6 +691,14 @@ export class Reader {
   }
 
   private onPressUp(ev: PointerEvent): void {
+    const g = this.pan
+    if (g && ev.pointerId === g.id) {
+      ev.stopPropagation()
+      this.pan = null
+      delete this.root.dataset.panning
+      if (g.far > 4) this.justMade = this.panEnd = performance.now() // 拖完松手跟着的那一下 click 不算点批注、也不算点链接
+      return
+    }
     if (ev.pointerType === 'pen') this.penDown = false
     const f = this.finger
     if (f && ev.pointerType === 'touch') {
@@ -698,13 +818,17 @@ export class Reader {
     // Esc 也一样:焦点在白板上时引擎自己收下、不往上冒。我们有事可做(收浮层、关查找、回到选择工具)就先做并拦下;没事可做再给它(放下它选中的东西)。
     if (ev.key === 'Escape' && this.ink?.owns(ev.target)) { this.onKey(ev); return }
     if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
+    // 空格 = 临时抓手。在捕获阶段拦下:焦点在白板层上时引擎也拿空格当抓手,它挪的是自己的画布、和页面对不上。
+    // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
+    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
       ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
       return
     }
     if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
-      const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools()[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
+      // 数字键不算抓手(和白板一样,1 是选择)
+      const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools().filter(([x]) => x !== 'hand')[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
       if (tool && (this.ink || !BOARD_TOOLS.includes(tool))) {
         ev.preventDefault(); ev.stopPropagation()
         if (shape) this.ink!.setShape(shape)
@@ -998,7 +1122,8 @@ export class Reader {
       else if (act === 'link') { void navigator.clipboard?.writeText(`[[${baseOf(this.pdfPath)}#page=${this.page}]]`); ctx.notify?.(t('copy.done')) }
     })
     this.showPop(pop, { left: r.right - 200, top: r.top, bottom: r.bottom }, 'below')
-    pop.style.top = `${this.container.scrollTop + 6}px`
+    // 没有宿主浮层的旧版本(2.13.7):这份菜单画在页面的滚动层里,浮在页面上的那几块盖在它上面 —— 摆到顶上那条带子(和查找条)下面。
+    pop.style.top = `${this.container.scrollTop + 56 + (this.q('.pr-findbar').hidden ? 0 : 44)}px`
     pop.style.left = `${this.container.scrollLeft + this.container.clientWidth - pop.offsetWidth - 10}px`
   }
 
@@ -1068,12 +1193,12 @@ export class Reader {
     const bar = this.q('.pr-bottombar')
     bar.hidden = !this.pdf
     const zl = (v: string): string => (v === 'page-width' ? t('zoom.fitWidth') : v === 'page-fit' ? t('zoom.fitPage') : `${Math.round(parseFloat(v) * 100)}%`)
-    bar.innerHTML = `<button class="pr-btn" data-act="zoom-out" title="${esc(t('zoom.out'))}" aria-label="${esc(t('zoom.out'))}">${icon('minus', 13)}</button>
+    bar.innerHTML = `<span class="pr-isle pr-zoomcap"><button class="pr-btn" data-act="zoom-out" title="${esc(t('zoom.out'))}" aria-label="${esc(t('zoom.out'))}">${icon('minus', 13)}</button>
       <select class="pr-zoomsel" title="${esc(t('zoom.title'))}" aria-label="${esc(t('zoom.title'))}">${ZOOMS.map((v) => `<option value="${v}">${esc(zl(v))}</option>`).join('')}<option value="custom" hidden></option></select>
-      <button class="pr-btn" data-act="zoom-in" title="${esc(t('zoom.in'))}" aria-label="${esc(t('zoom.in'))}">${icon('plus', 13)}</button><span class="pr-sep"></span>
-      <button class="pr-btn" data-act="prev" title="${esc(t('page.prev'))}" aria-label="${esc(t('page.prev'))}">‹</button>
+      <button class="pr-btn" data-act="zoom-in" title="${esc(t('zoom.in'))}" aria-label="${esc(t('zoom.in'))}">${icon('plus', 13)}</button></span>
+      <span class="pr-isle pr-pagecap"><button class="pr-btn" data-act="prev" title="${esc(t('page.prev'))}" aria-label="${esc(t('page.prev'))}">${icon('chevron-left', 14)}</button>
       <input class="pr-pageinput" title="${esc(t('page.input'))}" aria-label="${esc(t('page.input'))}" inputmode="numeric"><span class="pr-pagetotal"></span>
-      <button class="pr-btn" data-act="next" title="${esc(t('page.next'))}" aria-label="${esc(t('page.next'))}">›</button>`
+      <button class="pr-btn" data-act="next" title="${esc(t('page.next'))}" aria-label="${esc(t('page.next'))}">${icon('chevron-right', 14)}</button></span>`
     bar.querySelector('select')!.addEventListener('change', (e) => { this.viewer.currentScaleValue = (e.target as HTMLSelectElement).value })
     bar.querySelector('input')!.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return
@@ -1095,13 +1220,116 @@ export class Reader {
     bar.querySelector('.pr-pagetotal')!.textContent = `/ ${this.pageCount || '…'}`
   }
 
-  // ── 缩略图 ──────────────────────────────────────────────────────────────────────
-  private toggleThumbs(): void {
+  // ── 左栏:目录 / 缩略图 ──────────────────────────────────────────────────────────
+  private toggleSide(): void {
     const side = this.q('.pr-side')
     side.dataset.motion = 'enter'
     side.hidden = !side.hidden
     this.renderToolbar()
-    if (side.hidden || this.thumbsBuilt || !this.pdf) { this.syncThumbs(); return }
+    this.renderSide()
+    this.syncFtoc()
+  }
+
+  private setSideTab(tab: 'toc' | 'thumbs'): void {
+    this.sideTab = lastSideTab = tab
+    try { localStorage.setItem(SIDE_KEY, tab) } catch { /* 存不上:只记这一程 */ }
+    this.renderSide()
+  }
+
+  private renderSide(): void {
+    const tab = this.sideTab, b = (v: string, label: string): string =>
+      `<button class="pr-sidetab${tab === v ? ' on' : ''}" role="tab" aria-selected="${tab === v}" data-act="side-tab" data-v="${v}">${esc(label)}</button>`
+    this.q('.pr-sidetabs').innerHTML = b('toc', t('side.toc')) + b('thumbs', t('side.thumbs'))
+    this.q('.pr-toc').hidden = tab !== 'toc'
+    this.q('.pr-thumbs').hidden = tab !== 'thumbs'
+    if (tab === 'toc') this.renderToc()
+    else this.buildThumbs()
+  }
+
+  private loadToc(): void {
+    const pdf = this.pdf
+    if (!pdf) return
+    void buildOutline(pdf).then((toc) => {
+      if (this.dead || this.pdf !== pdf) return
+      this.toc = toc
+      this.tocAt = -1
+      if (!this.q('.pr-side').hidden && this.sideTab === 'toc') this.renderToc()
+      this.placeAnchors()
+      this.syncFtoc()
+      this.emit()
+    }, () => { if (!this.dead && this.pdf === pdf) { this.toc = { items: [], source: 'none' }; this.renderToc(); this.emit() } })
+  }
+
+  private renderToc(): void {
+    const box = this.q('.pr-toc')
+    if (this.q('.pr-side').hidden || this.sideTab !== 'toc') return
+    box.innerHTML = tocHtml(this.toc)
+    this.tocAt = -1
+    this.syncToc(this.page, null)
+  }
+
+  /** 高亮当前这一节(pdf.js 的 updateviewarea 带着视口顶边落在哪页、页内 PDF 坐标的 y)。 */
+  private syncToc(page: number | undefined, top: number | null | undefined): void {
+    const items = this.toc?.items
+    if (!items?.length || !page) return
+    // 探线在视口顶边往下 64px(跳过去的标题停在 56px 处),换成 PDF 坐标:CSS 像素 = PDF 单位 × 缩放 × 4/3。
+    const at = currentIndex(items, page - 1, top == null ? null : top - 64 / ((this.viewer.currentScale || 1) * 4 / 3))
+    if (at === this.tocAt) return
+    this.tocAt = at
+    const box = this.q('.pr-toc')
+    box.querySelector('.pr-tocitem.on')?.classList.remove('on')
+    const b = box.querySelector<HTMLElement>(`.pr-tocitem[data-v="${at}"]`)
+    b?.classList.add('on')
+    if (b && !box.hidden && !this.q('.pr-side').hidden) b.scrollIntoView({ block: 'nearest' })
+  }
+
+  /** 跳到目录里第 i 条:标题停在离顶边一点的地方(上面浮着工具岛),两屏以内平滑滚过去,落地后那一行闪两下。 */
+  gotoToc(i: number): void {
+    const it = this.toc?.items[i], pv = it && this.viewer.getPageView?.(it.page)
+    if (!it || !pv?.div) return
+    const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(it.x ?? 0, it.top)[1]
+    const c = this.container, to = Math.max(0, offsetIn(pv.div, c) + y - 56)
+    c.scrollTo({ top: to, behavior: Math.abs(to - c.scrollTop) <= c.clientHeight * 2 && !reduced() ? 'smooth' : 'auto' })
+    if (it.top == null) return
+    pv.div.querySelector('.pr-flash')?.remove()
+    const f = el(`<div class="pr-flash" style="top:${Math.max(0, y - 4)}px;height:${Math.round(Math.max(18, 22 * (this.viewer.currentScale || 1)))}px"></div>`)
+    pv.div.append(f)
+    // 闪两下、第二下弱一点(DESIGN 的 --flash-duration 1100ms;等滚动落地再闪)。减少动态效果:静静亮一下。
+    if (reduced()) f.style.opacity = '0.6'
+    else f.animate([{ opacity: 0 }, { opacity: 1, offset: 0.18 }, { opacity: 0, offset: 0.45 }, { opacity: 0.7, offset: 0.68 }, { opacity: 0 }], { duration: 1100, delay: 250, easing: 'ease-in-out' })
+    setTimeout(() => f.remove(), 1600)
+  }
+
+  /** 悬浮目录的锚点:一条一个空 div,按「页的位置 + 页内高度」放进滚动层,宿主的悬浮目录拿它们算当前节和轨道刻度。 */
+  private placeAnchors(): void {
+    const box = this.q('.pr-anchors'), items = this.toc?.items
+    if (!items?.length || !this.ftoc) { box.textContent = ''; return }
+    if (box.childElementCount !== items.length) box.innerHTML = items.map((_, i) => `<div data-i="${i}"></div>`).join('')
+    items.forEach((it, i) => {
+      const pv = this.viewer.getPageView?.(it.page)
+      if (!pv?.div) return
+      const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(it.x ?? 0, it.top)[1]
+      ;(box.children[i] as HTMLElement).style.top = `${offsetIn(pv.div, this.container) + y}px`
+    })
+  }
+
+  /** 左栏收着时,页面左边浮一条宿主的悬浮目录(没有这个接口的宿主上就不出现);左栏开着时目录已经在那儿,不重复。 */
+  private syncFtoc(): void {
+    const want = !!this.toc && this.toc.items.length >= 2 && this.q('.pr-side').hidden && !!ctx.ui?.mountFloatingToc
+    if (!want) { this.ftoc?.dispose(); this.ftoc = null; this.placeAnchors(); return }
+    this.ftoc ??= ctx.ui!.mountFloatingToc!(this.q('.pr-viewport'), {
+      scrollContainer: this.container, contentRoot: this.q('.pr-anchors'), selector: '[data-i]', label: t('side.toc'), topOffset: 56,
+      itemFromElement: (n) => {
+        const i = Number(n.dataset.i), it = this.toc?.items[i]
+        return it ? { text: it.title, level: it.level + 1, onSelect: () => this.gotoToc(i) } : null
+      },
+    })
+    this.placeAnchors()
+    this.ftoc.refresh()
+  }
+
+  private buildThumbs(): void {
+    if (this.q('.pr-side').hidden || this.thumbsBuilt || !this.pdf) { this.syncThumbs(); return }
     this.thumbsBuilt = true
     const wrap = this.q('.pr-thumbs'), pdf = this.pdf
     wrap.innerHTML = Array.from({ length: pdf.numPages }, (_, i) => `<button class="pr-thumb" data-act="thumb" data-v="${i + 1}"><canvas></canvas><span>${i + 1}</span></button>`).join('')
@@ -1122,14 +1350,14 @@ export class Reader {
           canvas.getContext('2d')!.drawImage(off, 0, 0)
         }).catch(() => { /* 文档已关 */ })
       }
-    }, { root: this.q('.pr-side'), rootMargin: '400px' })
+    }, { root: this.q('.pr-thumbs'), rootMargin: '400px' })
     wrap.querySelectorAll('.pr-thumb').forEach((b) => io.observe(b))
     this.off.push(() => io.disconnect())
     this.syncThumbs()
   }
 
   private syncThumbs(): void {
-    if (this.q('.pr-side').hidden) return
+    if (this.q('.pr-thumbs').hidden || this.q('.pr-side').hidden) return
     for (const b of this.root.querySelectorAll<HTMLElement>('.pr-thumb')) {
       const on = Number(b.dataset.v) === this.page
       if (on && !b.classList.contains('on')) b.scrollIntoView({ block: 'nearest' })
@@ -1168,6 +1396,8 @@ export class Reader {
     this.renderToolbar()
     this.renderFindbar()
     if (this.pdf) this.renderBottombar()
+    if (!this.q('.pr-side').hidden) this.renderSide()
+    if (this.ftoc) { this.ftoc.dispose(); this.ftoc = null; this.syncFtoc() }
     if (this.q('.pr-state').dataset.state !== 'ready') this.setState(this.q('.pr-state').dataset.state as 'loading' | 'error')
     this.closePop()
     this.repaint()
@@ -1180,6 +1410,7 @@ export class Reader {
     // 页面上正打着字的文字框:先收进数据再走。
     this.commitText(document.activeElement as HTMLElement | null)
     this.ink?.dispose()
+    this.ftoc?.dispose()
     for (const f of this.off) { try { f() } catch { /* 收尾不抛 */ } }
     this.mo.disconnect()
     const saved = this.doc ? release(this.doc, this.io) : this.loading

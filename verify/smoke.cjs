@@ -279,15 +279,18 @@ async function main() {
     const quoted = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S1), 8000)
     check('④b 问 Tangu:引文递进右栏的对话', !!quoted, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
     await win.screenshot({ path: path.join(SHOTS, '2b-ask.png') })
-    // ④c 大纲:右栏的第二个标签
-    const tab = win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab [aria-label="大纲"], .dv-tab:has([aria-label="大纲"])').first()
-    if (await tab.count()) {
-      await tab.click(); const n = await until(() => win.locator('.pr-outline button').count().then((c) => c >= 3 && c), 5000)
-      check('④c 大纲列出 PDF 的目录', n >= 3, `条目 ${n}`)
-      await win.locator('.pr-outline button').nth(1).click(); await win.waitForTimeout(700)
-      check('④c 点目录跳到那一页', await win.locator('.pr-pageinput').inputValue() === '2')
-      await win.locator('.pr-pageinput').fill('1'); await win.locator('.pr-pageinput').press('Enter'); await win.waitForTimeout(600)
-    } else console.log('SKIP  ④c 大纲:没找到右栏的标签(标签条的结构变了?)', await win.evaluate(() => [...document.querySelectorAll('.dv-tab')].map((t) => t.outerHTML.slice(0, 160)).join(' || ')))
+    // ④c 目录:在左栏(11-03 起)。悬浮目录的刻度:2.13.8 起叫 .lcl-ftoc-tick,2.13.7 叫 .lcl-ftoc-bar,缺省是「目录」那一格;右栏不再自动开「大纲」
+    check('④c 右栏不再自动开「大纲」', !(await win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab:has([aria-label="大纲"])').count()))
+    await win.locator('.pr-toolbar [data-act="side"]').click()
+    const nToc = await until(() => win.locator('.pr-toc .pr-tocitem').count().then((c) => c >= 3 && c), 6000)
+    check('④c 左栏缺省是目录:列出这份 PDF 的书签', nToc >= 3 && await win.locator('.pr-sidetab.on').getAttribute('data-v') === 'toc', `条目 ${nToc}`)
+    await win.locator('.pr-toc .pr-tocitem').nth(1).click(); await win.waitForTimeout(350)
+    const flashed = await win.locator('.pr-flash').count(); await win.waitForTimeout(700)
+    check('④c 点目录跳到那一页、那一行闪一下,那一条亮着', await win.locator('.pr-pageinput').inputValue() === '2' && flashed === 1 && await win.locator('.pr-tocitem.on').getAttribute('data-v') === '1', `flash ${flashed}`)
+    await win.locator('.pr-pageinput').fill('1'); await win.locator('.pr-pageinput').press('Enter'); await win.waitForTimeout(600)
+    await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(400)
+    const ftoc = await until(() => win.evaluate(() => document.querySelectorAll('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').length || 0), 4000)
+    check('④c 左栏收起后页面边上浮出宿主的悬浮目录(一条一个刻度)', ftoc >= 3, `刻度 ${ftoc}`)
     await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
 
     // ④d 查找 + 缩略图
@@ -295,11 +298,35 @@ async function main() {
     const found = await until(() => win.locator('.pr-findcount').innerText().then((t) => /1 \/ 1/.test(t) && t), 6000)
     check('④d 查找:数出命中并跳到那一页', !!found && await win.locator('.pr-pageinput').inputValue() === '2', String(found))
     await win.locator('.pr-findbar [data-act="find-close"]').click()
-    await win.locator('.pr-toolbar [data-act="thumbs"]').click()
+    await win.locator('.pr-toolbar [data-act="side"]').click(); await win.locator('.pr-sidetab[data-v="thumbs"]').click()
+    check('④c 左栏开着时没有悬浮目录', !(await win.locator('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').count()))
     const thumbs = await until(() => win.evaluate(() => { const c = [...document.querySelectorAll('.pr-thumb canvas')]; return c.length === 3 && c[0].width > 100 && c.length }), 6000)
     check('④d 缩略图栏画出三页', thumbs === 3)
     await win.locator('.pr-thumb').first().click(); await win.waitForTimeout(500)
-    await win.locator('.pr-toolbar [data-act="thumbs"]').click(); await win.waitForTimeout(800)
+    await win.locator('.pr-sidetab[data-v="toc"]').click(); await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(800)
+
+    // ④e 浮在页面上的几块(方案 A):宽处工具岛在顶上居中、几块互不压;窄处(< 660px)工具岛停到底下,翻页挪到顶上,缩放收起
+    await win.locator('.pr-toolbar [data-v="highlight"]').click(); await win.waitForTimeout(400)
+    const isles = () => win.evaluate(() => {
+      const r = (q) => { const e = document.querySelector(q); if (!e || !e.offsetWidth) return null; const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom } }
+      const v = r('.pr-viewport'), all = ['.pr-sidecap', '.pr-tools', '.pr-right', '.pr-palette', '.pr-zoomcap', '.pr-pagecap'].map((q) => [q, r(q)]).filter(([, b]) => b)
+      const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b
+      const overlaps = all.flatMap(([qa, a], i) => all.slice(i + 1).filter(([, b]) => hit(a, b)).map(([qb]) => `${qa}×${qb}`))
+      const tools = r('.pr-tools')
+      return { w: document.querySelector('.pr-root').dataset.w ?? '', overlaps, inside: all.every(([, b]) => b.l >= v.l - 1 && b.r <= v.r + 1 && b.t >= v.t - 1 && b.b <= v.b + 1),
+        centred: Math.abs((tools.l + tools.r) / 2 - (v.l + v.r) / 2) < 2, toolsTop: tools.t - v.t, toolsBottom: v.b - tools.b }
+    })
+    const wide = await isles()
+    check('④e 宽处:工具岛在顶上居中,色点那排在它下面,几块互不压、都在阅读区里', !wide.w && wide.centred && wide.toolsTop < 20 && !wide.overlaps.length && wide.inside, JSON.stringify(wide))
+    await win.screenshot({ path: path.join(SHOTS, '4e-wide.png') })
+    await win.evaluate(() => { document.querySelector('.pr-root').style.width = '600px' }); await win.waitForTimeout(600)
+    const dock = await isles()
+    check('④e 窄处:工具岛停到底下居中,色点那排在它上面,翻页挪到顶上,缩放收起,互不压', dock.w === 'dock' && dock.centred && dock.toolsBottom < 20 && !dock.overlaps.length && dock.inside && !(await win.locator('.pr-zoomcap').isVisible()), JSON.stringify(dock))
+    await win.screenshot({ path: path.join(SHOTS, '4e-dock.png') })
+    await win.evaluate(() => { document.querySelector('.pr-root').style.width = '' }); await win.waitForTimeout(600)
+    await win.locator('.pr-toolbar [data-v="select"]').click(); await win.waitForTimeout(300)
+    const ind = await win.evaluate(() => { const i = document.querySelector('.pr-ind').getBoundingClientRect(), b = document.querySelector('.pr-tools [data-v="select"]').getBoundingClientRect(); return Math.abs(i.left - b.left) + Math.abs(i.width - b.width) })
+    check('④e 工具岛上的高亮块停在手上那件工具下面', ind < 2, `偏差 ${ind}`)
 
     // ⑤ 下划线工具:拖着的时候就画出来,松手即成
     await win.locator('.pr-toolbar [data-v="underline"]').click()
@@ -515,14 +542,18 @@ async function main() {
       const onP2 = () => readSidecar().annots.some((a) => a.page === 1 && a.type === 'highlight')
       const madeP2 = onP2()
       await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(400)
-      const bar = await win.locator('.pr-bottombar').boundingBox(), kz = Number(process.env.UI_ZOOM) || 1
+      const kz = Number(process.env.UI_ZOOM) || 1
       let b4 = await sentenceBox(win, S4, 2)
+      // 浮着的几块在四角(方案 A),这句话不一定正好在哪一块后面:把左下那块(缩放)平移到这句话的横向范围里,只挪位置
+      await win.evaluate((x) => { const c = document.querySelector('.pr-zoomcap'), r = c.getBoundingClientRect(), z = r.width / c.offsetWidth; c.style.transform = `translateX(${(x - r.left) / z}px)` }, b4.left + 20)
+      const bar = await win.locator('.pr-zoomcap').boundingBox()
       await win.evaluate((dy) => document.querySelector('.pr-container').scrollBy(0, dy), (b4.y0 - (bar.y + bar.height / 2)) / kz); await win.waitForTimeout(700)
       b4 = await sentenceBox(win, S4, 2)
-      const bx = bar.x + 3, by = bar.y + bar.height / 2 // 底栏左边的留白:点它没有别的副作用
+      const bx = bar.x + 2, by = bar.y + bar.height / 2 // 那一块左边的留白:点它没有别的副作用
       const behind = bx > b4.left && bx < b4.right && Math.abs(b4.y0 - by) < 8
       await win.mouse.click(bx, by); await win.waitForTimeout(700)
       const survived = onP2()
+      await win.evaluate(() => { document.querySelector('.pr-zoomcap').style.transform = '' })
       await win.evaluate((dy) => document.querySelector('.pr-container').scrollBy(0, dy), 160 / kz); await win.waitForTimeout(700)
       b4 = await sentenceBox(win, S4, 2)
       await win.mouse.move(b4.x0 + 30, b4.top - 12); await win.mouse.down(); await win.mouse.move(b4.x0 + 30, b4.top + 26, { steps: 6 }); await win.mouse.up()
@@ -695,6 +726,8 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, '12-custom-colour-card.png') })
     await win.keyboard.press('Escape'); await win.waitForTimeout(250)
     check('⑯b 批注卡上换完颜色,Esc 照样关得掉它(那一排色点重画之后键盘焦点没有掉出去)', await win.locator('.pr-card').count() === 0)
+    // 工具栏的色点只在用得上颜色的工具下才有(11-03):先拿起高亮
+    await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').click(); await win.waitForTimeout(150)
     await win.locator('.pr-toolbar input[type="color"][data-color="color"]').fill(C3); await win.waitForTimeout(250)
     const bar = await win.evaluate(() => ({ on: document.querySelector('.pr-toolbar .pr-dot.on')?.dataset.v, dots: [...document.querySelectorAll('.pr-toolbar .pr-dot[data-v]')].map((d) => d.dataset.v), rows: Math.round(document.querySelector('.pr-toolbar').getBoundingClientRect().height / document.querySelector('.pr-toolbar .pr-tool').getBoundingClientRect().height), kept: localStorage.getItem('forsion-pdf-reader.colors') }))
     check('⑯b 工具栏上挑的成了当前颜色;最近挑过的三种排在固定色点后面,记得住;工具栏仍是一行', bar.on === C3 && bar.dots.slice(-3).join() === [C3, C2, C1].join() && bar.dots.length === 8 && bar.rows === 1 && bar.kept === JSON.stringify([C3, C2, C1]), JSON.stringify(bar))
@@ -774,6 +807,41 @@ async function main() {
       await win.locator('.pr-toolbar [data-act="penmode"]').click(); await win.waitForTimeout(1500)
     }
     await press('v'); await win.evaluate(() => window.getSelection().removeAllRanges())
+
+    // ⑰ 11-03 改版第一刀:色点只给用得上颜色的工具;抓手(抓手工具 / 按住空格 / 中键)拖页面,不选字、不画、不落批注。
+    const dotsAt = async (k) => { await press(k); return win.locator('.pr-toolbar .pr-dot').count() }
+    const dv = await dotsAt('v'), dh = await dotsAt('h'), du = await dotsAt('u'), de = inkOn ? await dotsAt('e') : 0
+    if (inkOn) await press('e') // 再按一次 E 回到上一个工具
+    await press('v')
+    check('⑰a 色点只在高亮 / 下划线这类工具下出现:选择、橡皮下工具栏没有色点', dv === 0 && dh > 0 && du > 0 && de === 0, JSON.stringify({ dv, dh, du, de }))
+    const cbox = await win.locator('.pr-container').boundingBox()
+    const st = () => win.evaluate(() => document.querySelector('.pr-container').scrollTop)
+    const drag = async (button, dy) => {
+      const x = cbox.x + cbox.width * 0.5, y = cbox.y + cbox.height * 0.55
+      await win.mouse.move(x, y); await win.mouse.down({ button }); await win.mouse.move(x, y - dy / 2, { steps: 4 }); await win.mouse.move(x, y - dy, { steps: 4 }); await win.mouse.up({ button }); await win.waitForTimeout(300)
+    }
+    await win.evaluate(() => { document.querySelector('.pr-container').scrollTop = 0 }); await win.waitForTimeout(300)
+    const g0 = annN(), s0 = await st()
+    await win.locator('.pr-toolbar [data-act="tool"][data-v="hand"]').click(); await win.waitForTimeout(200)
+    await drag('left', 200); const s1 = await st()
+    const flat = () => win.evaluate(() => window.getSelection().isCollapsed)
+    check('⑰b 抓手工具:往上拖,页面往下滚了差不多拖的距离;没选中字、没新批注', s1 - s0 > 150 && s1 - s0 < 260 && await flat() && annN() === g0, JSON.stringify({ s0, s1 }))
+    await press('v')
+    await win.keyboard.down('Space'); await win.waitForTimeout(150)
+    const grabOn = await win.evaluate(() => { const r = document.querySelector('.pr-root'); return [r.hasAttribute('data-grab'), document.querySelector('.pr-toolbar [data-v="hand"]').classList.contains('on'), r.dataset.tool].join() })
+    await drag('left', -150); const s2 = await st()
+    await win.keyboard.up('Space'); await win.waitForTimeout(150)
+    const grabOff = await win.evaluate(() => { const r = document.querySelector('.pr-root'); return [r.hasAttribute('data-grab'), r.dataset.tool].join() })
+    check('⑰c 选择工具下按住空格拖:页面跟着走、抓手亮;松开空格回到选择,没选中字、没新批注', grabOn === 'true,true,select' && s1 - s2 > 100 && grabOff === 'false,select' && await flat() && annN() === g0, JSON.stringify({ grabOn, grabOff, s1, s2 }))
+    const s3 = await st(); await drag('middle', 120); const s4 = await st()
+    check('⑰d 中键拖:选择工具下也是拖页面', s4 - s3 > 80 && await flat() && annN() === g0, JSON.stringify({ s3, s4 }))
+    if (inkOn) {
+      await press('p'); await win.waitForTimeout(800); const k0 = inkN(), s5 = await st()
+      await win.keyboard.down('Space'); await drag('left', 120); await win.keyboard.up('Space'); await win.waitForTimeout(700)
+      const s6 = await st()
+      check('⑰e 手写时按住空格拖:拖的是页面,没画出一笔;松开还是手写', s6 - s5 > 80 && inkN() === k0 && await tool() === 'ink', JSON.stringify({ s5, s6, ink: [k0, inkN()] }))
+      await press('v')
+    }
     } // parity
 
     full: {
