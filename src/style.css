@@ -187,6 +187,9 @@
 .pr-card { width: 308px; max-width: calc(100% - 16px); }
 .pr-card-top { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 8px; border-bottom: 1px solid var(--border); }
 .pr-card-body { display: block; width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px 4px; border: 0; outline: none; resize: none; background: transparent; color: var(--text); font: var(--ui-font-body, 13px) / 1.55 var(--font-ui, inherit); }
+/* 宿主编辑器(2.13.8+):卡里只留正文那一块,高度封顶后自己滚 */
+.pr-card-md { min-height: 44px; max-height: 220px; overflow: auto; padding: 4px 12px 0; cursor: text; }
+.pr-card-md .md-block { min-height: 0; }
 .pr-card-foot { display: flex; align-items: center; gap: 6px; padding: 6px 12px 10px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
 .pr-tags { display: flex; flex-wrap: wrap; gap: 5px; white-space: normal; }
 .pr-tag { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; }
@@ -212,6 +215,11 @@
 .pr-kind { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; background: color-mix(in srgb, var(--c) 30%, transparent); color: color-mix(in srgb, var(--c) 55%, var(--text)); }
 .pr-quote { border-left: 2.5px solid var(--c); padding-left: 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .pr-cmt { font-size: var(--ui-font-body, 13px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pr-md { white-space: normal; }
+.pr-md .md-body > :first-child { margin-top: 0; }
+.pr-md .md-body > :last-child { margin-bottom: 0; }
+.pr-md .md-body p { margin: 0 0 4px; }
+.pr-item:focus-visible { outline: 2px solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
 .pr-item .pr-tags span { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
 .pr-outline { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 0; }
 .pr-chat { flex: 1 1 auto; min-height: 0; height: 100%; }

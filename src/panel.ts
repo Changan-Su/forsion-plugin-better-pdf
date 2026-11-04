@@ -1,5 +1,5 @@
 // 右栏的三个视图:批注列表 / 大纲 / 对话。它们不属于某一个标签,跟着「最近操作过的那份 PDF」走。
-import { KIND_ICON, chat, esc, fmtTime, getActive, onActive, tocHtml, type Reader } from './reader'
+import { KIND_ICON, chat, esc, fmtTime, getActive, onActive, richNotes, tocHtml, type Reader } from './reader'
 import { buildOutline } from './outline'
 import { baseOf } from './store'
 import { icon } from './icons'
@@ -26,6 +26,22 @@ export function mountAnnots(host: HTMLElement): () => void {
   host.innerHTML = '<div class="pr-panel"><div class="pr-listhead"><b></b><input class="pr-listfilter" type="search"></div><div class="pr-list"></div></div>'
   const head = host.querySelector('.pr-listhead') as HTMLElement, count = head.querySelector('b')!, input = head.querySelector('input')!, list = host.querySelector('.pr-list') as HTMLElement
   let filter = '', last = '', lastSel: string | null = null
+  // 附言按 Markdown 渲染:每条一个宿主挂载,按 id 留着,重画时整块搬回原位、正文变了才 update(列表随每次按键重画)
+  const mds = new Map<string, { md: string; el: HTMLElement; h: { update(p: { markdown: string }): void; dispose(): void } }>()
+  const keepMds = (comments: Map<string, string>): void => {
+    for (const ph of list.querySelectorAll<HTMLElement>('[data-md]')) {
+      const id = ph.dataset.md!, md = comments.get(id)!
+      let m = mds.get(id)
+      if (!m) {
+        const el = document.createElement('div')
+        el.className = 'pr-cmt pr-md'
+        m = { md, el, h: ctx.ui!.mountMarkdown!(el, { markdown: md }) }
+        mds.set(id, m)
+      } else if (m.md !== md) { m.md = md; m.h.update({ markdown: md }) }
+      ph.replaceWith(m.el)
+    }
+    for (const [id, m] of mds) if (!comments.has(id)) { m.h.dispose(); mds.delete(id) }
+  }
 
   const draw = (r: Reader | null): void => {
     const doc = r?.doc
@@ -35,40 +51,48 @@ export function mountAnnots(host: HTMLElement): () => void {
     last = key
     input.placeholder = t('list.filter')
     head.hidden = !doc
-    if (!r || !doc) { list.innerHTML = empty(t('list.noPdf')); return }
+    if (!r || !doc) { list.innerHTML = empty(t('list.noPdf')); keepMds(new Map()); return }
     const items: { page: number; html: string }[] = []
+    const rich = richNotes(), comments = new Map<string, string>()
     const match = (...parts: (string | undefined)[]): boolean => !filter || parts.some((p) => p?.toLowerCase().includes(filter))
     for (const a of doc.sorted()) {
       if (!match(a.text, a.comment, ...(a.tags ?? []).map((g) => `#${g}`))) continue
-      items.push({ page: a.page, html: `<button class="pr-item${a.id === r.selected ? ' sel' : ''}" data-id="${a.id}" style="--c:${a.color}">
+      if (rich && a.comment) comments.set(a.id, a.comment)
+      items.push({ page: a.page, html: `<div class="pr-item${a.id === r.selected ? ' sel' : ''}" role="button" tabindex="0" data-id="${a.id}" style="--c:${a.color}">
         <span class="pr-item-top"><span class="pr-kind">${icon(KIND_ICON[a.type], 11)}</span><span>${esc(t(`kind.${a.type}`))} · ${esc(t('card.page', { n: a.page + 1 }))}</span><span class="pr-flex"></span><span>${esc(fmtTime(a.created))}</span></span>
-        ${a.text ? `<span class="${a.type === 'text' ? 'pr-cmt' : 'pr-quote'}">${esc(a.text)}</span>` : ''}${a.comment ? `<span class="pr-cmt">${esc(a.comment)}</span>` : ''}
-        ${a.tags?.length ? `<span class="pr-tags">${a.tags.map((g) => `<span>#${esc(g)}</span>`).join('')}</span>` : ''}</button>` })
+        ${a.text ? `<span class="${a.type === 'text' ? 'pr-cmt' : 'pr-quote'}">${esc(a.text)}</span>` : ''}${a.comment ? (rich ? `<span data-md="${a.id}"></span>` : `<span class="pr-cmt">${esc(a.comment)}</span>`) : ''}
+        ${a.tags?.length ? `<span class="pr-tags">${a.tags.map((g) => `<span>#${esc(g)}</span>`).join('')}</span>` : ''}</div>` })
     }
     let inkPages = 0
     for (const [p, els] of Object.entries(doc.data.ink)) {
       if (!els.length) continue
       inkPages++
       if (filter) continue
-      items.push({ page: Number(p), html: `<button class="pr-item" data-page="${Number(p) + 1}" style="--c:#2b4acb">
+      items.push({ page: Number(p), html: `<div class="pr-item" role="button" tabindex="0" data-page="${Number(p) + 1}" style="--c:#2b4acb">
         <span class="pr-item-top"><span class="pr-kind">${icon(KIND_ICON.ink, 11)}</span><span>${esc(t('kind.ink'))} · ${esc(t('card.page', { n: Number(p) + 1 }))}</span></span>
-        <span class="pr-inkthumb">${r.ink?.thumb(Number(p)) ?? ''}</span></button>` })
+        <span class="pr-inkthumb">${r.ink?.thumb(Number(p)) ?? ''}</span></div>` })
     }
     count.textContent = t('list.count', { n: doc.data.annots.length + inkPages })
     items.sort((a, b) => a.page - b.page)
     list.innerHTML = items.length ? items.map((i) => i.html).join('') : empty(t(filter ? 'list.noMatch' : 'list.empty'))
+    keepMds(comments)
     if (r.selected !== lastSel) list.querySelector('.pr-item.sel')?.scrollIntoView({ block: 'nearest' })
     lastSel = r.selected
   }
 
   input.addEventListener('input', () => { filter = input.value.trim().toLowerCase(); draw(getActive()) })
-  list.addEventListener('click', (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>('.pr-item'), r = getActive()
+  const open = (e: Event): void => {
+    const tg = e.target as HTMLElement
+    if (tg.closest('.pr-md a')) return // 附言里的双链 / 链接:交给它自己,不跳到这条批注
+    const b = tg.closest<HTMLElement>('.pr-item'), r = getActive()
     if (!b || !r) return
     if (b.dataset.id) r.reveal(b.dataset.id)
     else if (b.dataset.page) r.viewer.currentPageNumber = Number(b.dataset.page)
-  })
-  return follow(draw)
+  }
+  list.addEventListener('click', open)
+  list.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && (e.target as HTMLElement).matches('.pr-item')) { e.preventDefault(); open(e) } })
+  const off = follow(draw)
+  return () => { off(); keepMds(new Map()) }
 }
 
 export function mountOutline(host: HTMLElement): () => void {

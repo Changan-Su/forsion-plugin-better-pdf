@@ -17,6 +17,13 @@ let passed = 0
 function check(name, ok) { assert.ok(ok, name); console.log(`PASS ${name}`); passed++ }
 async function until(fn, timeout = 8000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await fn()) return; await pause(80) } throw new Error('Condition timed out') }
 const saved = () => fs.existsSync(sidecar) ? JSON.parse(fs.readFileSync(sidecar, 'utf8')) : null
+/** Card body: a textarea on older hosts, the host Amadeus editor (ProseMirror, no fill()) from 2.13.8. */
+async function fillCard(card, text) {
+  const body = card.locator('textarea, .pr-card-md [contenteditable="true"]').first()
+  if (await body.evaluate((n) => n.tagName === 'TEXTAREA')) return body.fill(text)
+  await body.click(); await body.page().keyboard.press('ControlOrMeta+a'); await body.page().keyboard.type(text)
+}
+
 async function main() {
   fs.mkdirSync(path.dirname(pdf), { recursive: true })
   const doc = await PDFDocument.create(), font = await doc.embedFont(StandardFonts.Helvetica)
@@ -57,7 +64,7 @@ async function main() {
     await win.mouse.click(mark.x + mark.width / 2, mark.y + mark.height / 2)
     const card = win.locator('.ui-popover .pr-card').first(); await card.waitFor({ state: 'visible' })
     check('annotation card uses the host popover', await card.getAttribute('data-hosted') !== null)
-    await card.locator('textarea').fill('Draft while editing')
+    await fillCard(card, 'Draft while editing')
     await pause(120)
     const anchored = await card.boundingBox()
     check('editing keeps the card anchored below its annotation', anchored.y >= mark.y + mark.height - 2 && anchored.y < mark.y + mark.height + 40 && anchored.x > mark.x - 30)
@@ -71,7 +78,7 @@ async function main() {
     await pause(150)
     await win.mouse.click(mark.x + mark.width / 2, mark.y + mark.height / 2)
     await card.waitFor({ state: 'visible' })
-    await card.locator('textarea').fill('Last edit before closing the tab')
+    await fillCard(card, 'Last edit before closing the tab')
     // Close immediately, within the plugin's 400ms comment debounce.
     const closeTab = async () => {
       const tab = win.locator('.wb-tab').filter({ hasText: 'Research paper.pdf' }).last()
@@ -86,7 +93,7 @@ async function main() {
     const notePage = await root().locator('.page[data-page-number="1"]').boundingBox()
     await win.mouse.click(notePage.x + notePage.width - 60, notePage.y + 120)
     await pause(300)
-    check('new note card receives keyboard focus', await win.evaluate(() => document.activeElement?.classList.contains('pr-card-body')))
+    check('new note card receives keyboard focus', await win.evaluate(() => !!document.activeElement?.closest('.pr-card-body')))
     await win.keyboard.type('Note entered from the keyboard')
     await until(() => saved()?.annots.some((a) => a.type === 'note' && a.comment === 'Note entered from the keyboard'))
     check('new sticky note focuses its host card and saves keyboard input', true)
