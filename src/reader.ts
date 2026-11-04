@@ -976,7 +976,8 @@ export class Reader {
 
   private openMore(anchorBtn: HTMLElement): void {
     if (this.hostMenu) { this.closePop(); return }
-    if (ctx.ui?.contextMenu) {
+    // 锚点重载和 popover 是宿主同一次加的;更早的宿主(2.13.7)只有 (x, y, items),传对象会同步抛错,菜单打不开
+    if (ctx.ui?.contextMenu && ctx.ui.popover) {
       this.closePop()
       this.hostMenu = ctx.ui.contextMenu({ anchor: anchorBtn, align: 'end' }, [
         { label: t('more.export'), icon: 'download', run: () => { void exportAnnotated(this) } },
