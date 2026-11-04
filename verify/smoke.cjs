@@ -39,6 +39,14 @@ const PARITY = process.env.ONLY === 'parity'
 // ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇四页的论文样张和一条空笔记),装好本仓的插件就停住,
 // 不跑任何检查 —— 给人或 computer use 照真实工作流上手体验用。Ctrl-C / 杀掉本进程即收场。建议带 UI_ZOOM=1.1。
 const STAGE = process.env.ONLY === 'stage'
+// 批注卡的正文:宿主 2.13.8+ 是 Amadeus 编辑器(.pr-card-md 里的 contenteditable),更早是文本框
+const CARD_BODY = '.pr-card textarea, .pr-card .pr-card-md [contenteditable="true"]'
+/** 往批注卡里写一段(换掉原来的):文本框直接 fill;宿主编辑器(ProseMirror)不认 fill,全选后真打字。 */
+const fillCard = async (win, text) => {
+  const body = win.locator(CARD_BODY).first()
+  if (await body.evaluate((n) => n.tagName === 'TEXTAREA')) return body.fill(text)
+  await body.click(); await win.keyboard.press('ControlOrMeta+a'); await win.keyboard.type(text)
+}
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
 
 /** 摆台用的样张:一篇像样的四页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
@@ -251,7 +259,7 @@ async function main() {
     check('③ 点高亮弹出批注卡', await win.locator('.pr-card').isVisible())
     const cardNear = await near('.pr-card', b1)
     check('③ 批注卡贴着那条高亮', cardNear === true, cardNear === true ? '' : `${cardNear} vs ${JSON.stringify(b1)}`)
-    await win.locator('.pr-card textarea').fill('核心论点,回看才值钱。')
+    await fillCard(win, '核心论点,回看才值钱。')
     await win.locator('.pr-card .pr-tag.add').click(); await win.keyboard.type('核心'); await win.keyboard.press('Enter')
     await win.locator('.pr-card .pr-dot').nth(3).click()
     const saved = (a) => a && a.comment === '核心论点,回看才值钱。' && a.tags?.[0] === '核心' && a.color === '#2ea8e5'
@@ -261,6 +269,44 @@ async function main() {
     check('③ 评论 / 标签 / 颜色都存下了', !!saved(sc.annots[0]), JSON.stringify({ ...sc.annots[0], quads: undefined }))
     const item = win.locator('.pr-item').first()
     check('③ 右栏列表同步出这一条', (await item.innerText()).includes(S1) && (await item.innerText()).includes('#核心'))
+
+    // ③b 宿主 2.13.8+:附言按 Amadeus 的 Markdown 写和看 —— 公式、[[双链]](补全笔记名、点了在旁边打开那篇笔记)
+    if (await win.locator('.pr-card .pr-card-md').count()) {
+      const before = readSidecar().annots[0].modified
+      await win.keyboard.press('Escape'); await win.waitForTimeout(300)
+      await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForSelector(CARD_BODY, { timeout: 5000 }); await win.waitForTimeout(500)
+      check('③b 只是打开批注卡:附言不被改写(没有新的修改时间)', readSidecar().annots[0].modified === before)
+      check('③b 卡里没有「编辑 / 源码 / 预览」那一排', await win.locator('.pr-card button[aria-pressed]').count() === 0)
+      const ed = win.locator(CARD_BODY).first()
+      await ed.click(); await ed.evaluate((n) => { const s = getSelection(); s.selectAllChildren(n); s.collapseToEnd() }); await win.waitForTimeout(100) // 光标放到最后(编辑器吃掉了块边上的 ↓)
+      await win.keyboard.press('Enter'); await win.keyboard.type('面积是 $x^2$,见 [[选题')
+      const pick = await until(() => win.evaluate(() => [...document.querySelectorAll('.wiki-suggest')].some((n) => n.textContent?.includes('选题'))), 3000)
+      await win.keyboard.press('Enter'); await win.keyboard.press('Enter'); await win.keyboard.type('第三行')
+      const ok = await until(() => { const c = readSidecar().annots[0].comment ?? ''; return c.includes('$x^2$') && c.includes('[[选题]]') && c.includes('核心论点') && c }, 5000)
+      check('③b 打 [[ 补出库里的笔记名,存下的是 Markdown 原文', !!pick && !!ok, JSON.stringify(readSidecar().annots[0].comment))
+      check('③b 卡里公式离开那一行就渲染', await until(() => win.locator('.pr-card .katex').count(), 3000) > 0)
+      await win.screenshot({ path: path.join(SHOTS, '2c-card-md.png') })
+      await win.keyboard.press('Escape'); await win.waitForTimeout(300)
+      const row = win.locator('.pr-item').first()
+      check('③b 右栏列表里公式、双链也渲染出来', await until(() => row.locator('.pr-md .katex').count(), 4000) > 0 && await row.locator('.pr-md .wikilink').count() > 0)
+      const look = await row.locator('.pr-md').evaluate((n) => ({ br: n.querySelectorAll('br').length, link: getComputedStyle(n.querySelector('.wikilink')).color, text: getComputedStyle(n).color }))
+      check('③b 列表里一行一行照卡里那样分开(单个换行就换行),双链是强调色', look.br >= 2 && look.link !== look.text, JSON.stringify(look))
+      const sel0 = await win.evaluate(() => document.querySelector('.pr-item.sel')?.getAttribute('data-id') ?? null)
+      await row.locator('.pr-md .wikilink').first().click()
+      const opened = await until(() => win.evaluate(() => [...document.querySelectorAll('.dv-tab')].some((t) => /选题/.test(t.textContent ?? ''))), 6000)
+      check('③b 点列表里的 [[选题]]:打开那篇笔记,PDF 那个标签还在', !!opened && await win.evaluate(() => [...document.querySelectorAll('.dv-tab')].some((t) => /Reading Fixture/.test(t.textContent ?? ''))))
+      await win.screenshot({ path: path.join(SHOTS, '2d-list-md.png') })
+      // 关掉旁边那篇笔记,回到只有 PDF 的样子(后面几项量的是 PDF 的几何)
+      await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => (t.querySelector('.wb-tab-name')?.textContent ?? '').trim() === '选题')?.querySelector('.wb-tab-close')?.click())
+      const closed = await until(() => win.evaluate(() => ![...document.querySelectorAll('.wb-tab-name')].some((t) => t.textContent?.trim() === '选题') && !document.querySelector('.pr-root[data-w="dock"]')), 4000)
+      check('③b 关掉旁边那篇笔记:PDF 回到整宽', !!closed)
+      void sel0
+      await win.screenshot({ path: path.join(SHOTS, '2e-note-closed.png') })
+      // 把附言恢复成 ③ 写的那句(后面 ④ / ⑪ 还认它)
+      await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForSelector(CARD_BODY, { timeout: 5000 })
+      await fillCard(win, '核心论点,回看才值钱。')
+      await until(() => readSidecar().annots[0].comment === '核心论点,回看才值钱。', 4000) // 卡留着开:④ 接着在它上面点「引用」
+    } else console.log('SKIP  ③b 宿主没有 ctx.ui.mountMarkdown(2.13.7 及更早):附言照旧是纯文本')
 
     // ④ 引用:复制到剪贴板(到笔记里自己粘贴);不再有读书笔记
     // 剪贴板换成页面里的一个变量:台架不碰这台机器上真的剪贴板。
@@ -343,7 +389,13 @@ async function main() {
     // ⑥ 便签
     const page1 = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
     await win.locator('.pr-toolbar [data-v="note"]').click()
-    await win.mouse.click(page1.x + page1.width - 60, page1.y + 120); await win.waitForTimeout(300)
+    const t6 = Date.now()
+    await win.mouse.click(page1.x + page1.width - 60, page1.y + 120)
+    // 新便签的卡自己拿焦点;宿主编辑器(2.13.8+)要等它建好 —— 量一下从点下去到能打字隔了多久
+    const typable = await until(() => win.evaluate(() => !!document.activeElement?.closest('.pr-card-body')), 3000)
+    const wait6 = Date.now() - t6
+    check('⑥ 点下便签:卡片弹出就能直接打字(焦点在卡里)', !!typable, `${wait6}ms`)
+    console.log(`INFO  ⑥ 点下便签到能打字:${wait6}ms`)
     await win.keyboard.type('这里要回头核对样本量'); await win.keyboard.press('Escape')
     await until(() => readSidecar().annots.some((a) => a.comment === '这里要回头核对样本量'))
     sc = readSidecar()
@@ -357,7 +409,7 @@ async function main() {
     const rectBox = async () => { const pg = await pageBox(), r = rectOnDisk(); return { x: pg.x + r.x * px, y: pg.y + r.y * px, w: r.width * px, h: r.height * px } }
     let R = null
     if (hasInk) {
-      await win.locator('.pr-toolbar [data-v="shape"]').click(); await win.waitForSelector('.pr-root.pr-inking', { timeout: 20_000 }); await win.waitForTimeout(600)
+      await win.locator('.pr-toolbar [data-v="shape"]').click(); await win.waitForSelector('.pr-root.pr-inking', { timeout: 20_000 }).catch(async (e) => { await win.screenshot({ path: path.join(SHOTS, 'fail-6b.png') }); console.log('STATE', JSON.stringify(await win.evaluate(() => ({ cards: document.querySelectorAll('.pr-card').length, tool: document.querySelector('.pr-tools .on, .pr-toolbar [data-v].on')?.getAttribute('data-v'), active: document.activeElement?.className, pops: document.querySelectorAll('.ui-popover').length })))); throw e }); await win.waitForTimeout(600)
       check('⑥b 形状工具默认是方框', await win.locator('.pr-toolbar [data-act="shape"][data-v="rectangle"].on').count() === 1)
       const pgS = await pageBox() // 进了形状工具再量(工具栏这时可能多出一行)
       R = { x: pgS.x + 120, y: pgS.y + pgS.height * 0.48, w: 240, h: 90 }
@@ -428,8 +480,8 @@ async function main() {
       check('⑪d 撤销:三样都回来,评论和标签没丢', !!rectOnDisk() && back.annots.map((a) => a.id).sort().join() === before && back.annots.some((a) => a.comment === '核心论点,回看才值钱。' && a.tags?.[0] === '核心'), JSON.stringify({ annots: back.annots.map((a) => [a.type, a.comment]), rect: !!rectOnDisk() }))
       // ⑪e 撤销回来之后改了评论,再重做(又删掉)、再撤销:回来的得是改过的那一份,不是最早删掉时的旧样子
       const b1c = await sentenceBox(win, S1)
-      await win.mouse.click((b1c.left + b1c.right) / 2, b1c.y0); await win.waitForSelector('.pr-card textarea', { timeout: 5000 })
-      await win.locator('.pr-card textarea').fill('撤销之后改过的评论'); await until(() => readSidecar().annots.some((a) => a.comment === '撤销之后改过的评论'))
+      await win.mouse.click((b1c.left + b1c.right) / 2, b1c.y0); await win.waitForSelector(CARD_BODY, { timeout: 5000 })
+      await fillCard(win, '撤销之后改过的评论'); await until(() => readSidecar().annots.some((a) => a.comment === '撤销之后改过的评论'))
       await win.keyboard.press('Escape'); await win.waitForTimeout(200)
       await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => readSidecar().annots.length === 1, 4000)
       const redone = readSidecar().annots.length

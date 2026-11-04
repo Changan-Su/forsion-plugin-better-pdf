@@ -48,6 +48,8 @@ const ZOOMS = ['page-width', 'page-fit', '0.5', '0.75', '1', '1.25', '1.5', '2',
 /** 这次事件是不是发生在浮层里。按派发时的路径判断:浮层自己的处理函数可能已经把被点的那颗按钮换掉了,
  *  换掉之后它没有祖先,closest('.pr-pop') 会答「不在」,于是点「+ 标签」被当成点了页面空白。 */
 const inPop = (ev: Event): boolean => ev.composedPath().some((n) => n instanceof HTMLElement && n.classList.contains('pr-pop'))
+/** 宿主 2.13.8+:批注按 Amadeus 的 Markdown 写和看(公式、双链)。两个接口同一版到,只有编辑器的旧宿主不认 vault、还会画模式那一排。 */
+export const richNotes = (): boolean => !!(ctx.ui?.mountMarkdown && ctx.ui.mountMarkdownEditor)
 export const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const n2 = (x: number): string => x.toFixed(2)
 const el = <T extends HTMLElement = HTMLElement>(html: string): T => {
@@ -167,6 +169,7 @@ export class Reader {
   private readonly off: (() => void)[] = []
   private pop: HTMLElement | null = null
   private hostPop: { dispose(): void } | null = null
+  private cardMd: { pop: HTMLElement; h: { dispose(): void } } | null = null
   private hostMenu: (() => void) | null = null
   /** 宿主的划线条(新宿主才有);没有就照旧自己画浮条 .pr-selpop。 */
   private readonly bar: HostSelectionBarHandle | null
@@ -1007,13 +1010,15 @@ export class Reader {
     const ib = (act: string, ic: string, tip: string): string => `<button class="pr-ibtn" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}</button>`
     const pop = el(`<div class="pr-pop pr-card" data-kind="card">
       <div class="pr-card-top">${this.dotsHtml(a.color, 'color')}<span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-square-quote', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
-      <textarea class="pr-card-body" rows="2" placeholder="${esc(t('card.placeholder'))}"></textarea>
+      ${richNotes() ? '<div class="pr-card-body pr-card-md"></div>' : `<textarea class="pr-card-body" rows="2" placeholder="${esc(t('card.placeholder'))}"></textarea>`}
       <div class="pr-card-foot"><span class="pr-tags"></span><span class="pr-flex"></span><span>${esc(t('card.page', { n: a.page + 1 }))} · ${esc(fmtTime(a.created))}</span></div>
     </div>`)
-    const body = pop.querySelector('textarea')!
-    body.value = a.comment ?? ''
-    const grow = (): void => { body.style.height = 'auto'; body.style.height = `${Math.min(220, body.scrollHeight)}px` }
-    body.addEventListener('input', () => { this.doc?.patch(id, { comment: body.value || undefined }); grow() })
+    const body = pop.querySelector('textarea')
+    const grow = (): void => { if (body) { body.style.height = 'auto'; body.style.height = `${Math.min(220, body.scrollHeight)}px` } }
+    if (body) {
+      body.value = a.comment ?? ''
+      body.addEventListener('input', () => { this.doc?.patch(id, { comment: body.value || undefined }); grow() })
+    }
     const tagsBox = pop.querySelector<HTMLElement>('.pr-tags')!
     const drawTags = (): void => {
       tagsBox.innerHTML = (a.tags ?? []).map((g, i) => `<button class="pr-tag" data-pop="untag" data-i="${i}" title="${esc(t('card.removeTag'))}">#${esc(g)}</button>`).join('') +
@@ -1046,8 +1051,17 @@ export class Reader {
     })
     if (focus) pop.dataset.autofocus = ''
     this.showPop(pop, anchor, 'below')
+    if (!body && this.pop === pop) {
+      // 公式、列表、[[双链]] 按 Amadeus 的写法渲染;存的仍是这段 Markdown 原文
+      const h = ctx.ui!.mountMarkdownEditor!(pop.querySelector<HTMLElement>('.pr-card-md')!, {
+        value: a.comment ?? '', label: t('card.placeholder'), modes: false, vault: true,
+        onChange: (md) => this.doc?.patch(id, { comment: md.trimEnd() || undefined }), // 编辑器序列化总带个结尾换行,不存它
+      })
+      this.cardMd = { pop, h }
+      if (focus) h.focus()
+    }
     grow()
-    if (focus) body.focus()
+    if (focus) body?.focus()
   }
 
   // ── 浮层 ────────────────────────────────────────────────────────────────────────
@@ -1070,7 +1084,7 @@ export class Reader {
       this.hostPop = ctx.ui.popover(marker, {
         side: prefer === 'above' ? 'top' : 'bottom',
         label: t('view.annots'),
-        mount: (host) => { host.append(pop); const off = tooltips(pop); queueMicrotask(() => { if (this.pop === pop && pop.isConnected && pop.hasAttribute('data-autofocus')) pop.querySelector('textarea')?.focus({ preventScroll: true }) }); return () => { off(); marker.remove() } },
+        mount: (host) => { host.append(pop); const off = tooltips(pop); queueMicrotask(() => { if (this.pop === pop && pop.isConnected && pop.hasAttribute('data-autofocus')) pop.querySelector('textarea')?.focus({ preventScroll: true }) }); return () => { off(); marker.remove(); this.dropCardMd(pop) } },
         onClose: () => { if (this.pop === pop) { this.pop = null; this.hostPop = null; if (!this.dead) this.container.focus({ preventScroll: true }) } },
       })
       return
@@ -1088,7 +1102,15 @@ export class Reader {
     pop.style.top = `${Math.max(4, y)}px`
   }
 
+  /** 批注卡里的宿主编辑器跟着那张卡走:卡关了(不管谁关的)就卸掉。 */
+  private dropCardMd(pop?: HTMLElement): void {
+    if (!this.cardMd || (pop && this.cardMd.pop !== pop)) return
+    this.cardMd.h.dispose()
+    this.cardMd = null
+  }
+
   closePop(): void {
+    this.dropCardMd()
     this.hideBar()
     const had = this.pop?.contains(document.activeElement)
     this.hostMenu?.(); this.hostMenu = null

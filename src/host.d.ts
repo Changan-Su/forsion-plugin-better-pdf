@@ -85,6 +85,10 @@ declare const ctx: {
     contextMenu?(at: { anchor: HTMLElement; align?: 'start' | 'end' }, items: { label: string; icon?: string; run(): void }[], opts?: { onClose?(): void }): () => void
     popover?(anchor: HTMLElement, opts: { side?: 'top' | 'bottom'; label?: string; mount(el: HTMLElement): void | (() => void); onClose?(): void }): { dispose(): void; update(): void }
 
+    /** 2.13.0+(modes 2.13.3+,vault 2.13.8+)。宿主的 Amadeus 编辑器,正文归插件存。 */
+    mountMarkdownEditor?(el: HTMLElement, opts: { value: string; label?: string; modes?: boolean; vault?: boolean; onChange?(markdown: string): void }): { getValue(): string; focus(): void; dispose(): void }
+    /** 2.13.8+。只读 Markdown(聊天那套:公式、双链);有它就说明编辑器认 vault。 */
+    mountMarkdown?(el: HTMLElement, opts: { markdown: string }): { update(patch: { markdown?: string }): void; dispose(): void }
     mountBoard?(el: HTMLElement, opts: HostBoardOptions): HostBoardHandle
     boardToSvg?(scene: HostBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<{ svg: SVGSVGElement; x: number; y: number; width: number; height: number } | null>
     /** 2.9.9+。悬浮目录:宿主那套轨道 + 列表,条目来自 contentRoot 里匹配 selector 的元素。 */
