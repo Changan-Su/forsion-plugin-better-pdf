@@ -8,6 +8,7 @@ import { t } from './i18n'
 import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
+import { buildOutline, currentIndex, type Toc } from './outline'
 
 export const COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5']
 type Tool = 'hand' | 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
@@ -96,15 +97,36 @@ let panelOpened = false
  *  ① 标签移到新窗口后的那个窗口 —— 三个面板没处放,开进主区会把 PDF 这个标签顶掉,面板自己也因为没有阅读器是空的;
  *  ② 阅读器开在对话旁边那一格里(聊天里点引用、Agent 把 PDF 摆上台)—— 右栏一开,那一格就被顶掉,PDF 反而看不见了。
  *  ponytail: ② 认的是宿主那一格的类名 .agent-desk(已发布的宿主上没有别的办法知道);宿主给出正式的「我在哪种容器里」之后换掉。 */
+const SIDE_KEY = 'pdf-reader.side-tab'
+let lastSideTab: 'toc' | 'thumbs' = 'toc'
+try { if (localStorage.getItem(SIDE_KEY) === 'thumbs') lastSideTab = 'thumbs' } catch { /* 读不出来就用目录 */ }
+/** 一个元素在滚动层里的纵向位置(offsetTop 一路加到 root;不受界面缩放影响)。 */
+const offsetIn = (el: HTMLElement, root: HTMLElement): number => {
+  let y = 0
+  for (let n: HTMLElement | null = el; n && n !== root; n = n.offsetParent as HTMLElement | null) y += n.offsetTop
+  return y
+}
+const reduced = (): boolean => matchMedia('(prefers-reduced-motion: reduce)').matches
 export const hasRight = (at?: Element | null): boolean => !!ctx.viewLocations?.includes('right') && !at?.closest('.agent-desk')
-/** 把批注 / 大纲 / 对话开进右栏;没有右栏的地方什么都不做(对应的按钮也不出现)。 */
+/** 把批注 / 对话开进右栏;没有右栏的地方什么都不做(对应的按钮也不出现)。目录在左边那栏(11-03 用户定),
+ *  右栏的「大纲」视图还注册着(开着它的布局照旧能用),只是不再自动开出来。 */
 export function openPanel(id: 'annots' | 'outline' | 'chat' = 'annots', at?: Element | null): void {
   if (!hasRight(at)) return
   const open = (v: string): void => ctx.openView(v, { location: 'right' })
-  // 第一次:三个标签按「批注 / 大纲 / 对话」的顺序开出来,再回到要看的那个。
-  if (!panelOpened) { open('annots'); open('outline'); if (ctx.tangu?.mountChat) open('chat') }
+  // 第一次:两个标签按「批注 / 对话」的顺序开出来,再回到要看的那个。
+  if (!panelOpened) { open('annots'); if (ctx.tangu?.mountChat) open('chat') }
   panelOpened = true
   open(id)
+}
+
+/** 目录列表(左栏和右栏的「大纲」共用):一条一颗按钮,按级缩进;自动整理出来的在底下注明来源。 */
+export function tocHtml(toc: Toc | null): string {
+  if (!toc) return `<div class="pr-tocmsg">${esc(t('outline.building'))}</div>`
+  if (!toc.items.length) return `<div class="pr-tocmsg">${esc(t('outline.empty'))}</div>`
+  const note = toc.source === 'contents' ? t('outline.fromContents', { n: (toc.contentsPage ?? 0) + 1 }) : toc.source === 'fonts' ? t('outline.fromFonts') : ''
+  return `<div class="pr-toclist">${toc.items.map((it, i) =>
+    `<button class="pr-tocitem" data-act="toc" data-v="${i}" style="--l:${Math.min(it.level, 3)}" title="${esc(it.title)}">${esc(it.title || t('outline.untitled'))}</button>`).join('')}</div>` +
+    (note ? `<div class="pr-tocnote">${esc(note)}</div>` : '')
 }
 
 export class Reader {
@@ -154,6 +176,12 @@ export class Reader {
   private pendingPick: { pages: PageQuads[]; text: string } | null = null
   private justMade = 0
   private thumbsBuilt = false
+  /** 目录(打开后现算,见 outline.ts);null = 还在算。 */
+  toc: Toc | null = null
+  private tocStarted = false
+  private tocAt = -1
+  private sideTab = lastSideTab
+  private ftoc: { refresh(): void; dispose(): void } | null = null
   private pendingGoto: { page: number; quote?: string } | null = null
   /** 容器当前有尺寸、且页面已经按这个尺寸排过(由 ResizeObserver 维护)。 */
   private sized = false
@@ -166,9 +194,9 @@ export class Reader {
       <div class="pr-toolbar"></div>
       <div class="pr-findbar" hidden></div>
       <div class="pr-body">
-        <div class="pr-side" hidden><div class="pr-thumbs"></div></div>
+        <div class="pr-side" hidden><div class="pr-sidetabs" role="tablist"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
-          <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div></div>
+          <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div><div class="pr-anchors"></div></div>
           <div class="pr-board"></div>
           <div class="pr-bottombar" hidden></div>
           <div class="pr-state"></div>
@@ -276,9 +304,14 @@ export class Reader {
       this.off.push(() => target.removeEventListener(type, fn, opts))
     }
     eventBus.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; this.flushGoto() })
-    eventBus.on('pagerendered', (e: { pageNumber: number }) => { this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1) })
+    eventBus.on('pagerendered', (e: { pageNumber: number }) => {
+      this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1)
+      // 目录等第一页画出来再算:读字和画页走同一个 worker,先算会把第一屏拖慢。
+      if (!this.tocStarted) { this.tocStarted = true; setTimeout(() => this.loadToc(), 0) }
+    })
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
-    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport() })
+    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport(); this.placeAnchors() })
+    eventBus.on('updateviewarea', (e: any) => this.syncToc(e.location?.pageNumber, e.location?.top))
     eventBus.on('updatefindmatchescount', (e: any) => this.syncFind(e.matchesCount))
     eventBus.on('updatefindcontrolstate', (e: any) => this.syncFind(e.matchesCount, e.state))
 
@@ -379,7 +412,9 @@ export class Reader {
       case 'retry': this.loading = this.load(); break
       case 'tool': this.setTool(v as Tool); break
       case 'color': this.pickColor(v, b); break
-      case 'thumbs': this.toggleThumbs(); break
+      case 'side': this.toggleSide(); break
+      case 'side-tab': this.setSideTab(v as 'toc' | 'thumbs'); break
+      case 'toc': this.gotoToc(Number(v)); break
       case 'find': this.toggleFind(this.q('.pr-findbar').hidden); break
       case 'find-prev': this.find(true, true); break
       case 'find-next': this.find(true, false); break
@@ -420,7 +455,7 @@ export class Reader {
     const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
     // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
     bar.innerHTML =
-      `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
+      `<span class="pr-group">${btn('side', 'panel-left', t('tool.side'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
       (mid ? `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` : '') +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
@@ -1148,13 +1183,116 @@ export class Reader {
     bar.querySelector('.pr-pagetotal')!.textContent = `/ ${this.pageCount || '…'}`
   }
 
-  // ── 缩略图 ──────────────────────────────────────────────────────────────────────
-  private toggleThumbs(): void {
+  // ── 左栏:目录 / 缩略图 ──────────────────────────────────────────────────────────
+  private toggleSide(): void {
     const side = this.q('.pr-side')
     side.dataset.motion = 'enter'
     side.hidden = !side.hidden
     this.renderToolbar()
-    if (side.hidden || this.thumbsBuilt || !this.pdf) { this.syncThumbs(); return }
+    this.renderSide()
+    this.syncFtoc()
+  }
+
+  private setSideTab(tab: 'toc' | 'thumbs'): void {
+    this.sideTab = lastSideTab = tab
+    try { localStorage.setItem(SIDE_KEY, tab) } catch { /* 存不上:只记这一程 */ }
+    this.renderSide()
+  }
+
+  private renderSide(): void {
+    const tab = this.sideTab, b = (v: string, label: string): string =>
+      `<button class="pr-sidetab${tab === v ? ' on' : ''}" role="tab" aria-selected="${tab === v}" data-act="side-tab" data-v="${v}">${esc(label)}</button>`
+    this.q('.pr-sidetabs').innerHTML = b('toc', t('side.toc')) + b('thumbs', t('side.thumbs'))
+    this.q('.pr-toc').hidden = tab !== 'toc'
+    this.q('.pr-thumbs').hidden = tab !== 'thumbs'
+    if (tab === 'toc') this.renderToc()
+    else this.buildThumbs()
+  }
+
+  private loadToc(): void {
+    const pdf = this.pdf
+    if (!pdf) return
+    void buildOutline(pdf).then((toc) => {
+      if (this.dead || this.pdf !== pdf) return
+      this.toc = toc
+      this.tocAt = -1
+      if (!this.q('.pr-side').hidden && this.sideTab === 'toc') this.renderToc()
+      this.placeAnchors()
+      this.syncFtoc()
+      this.emit()
+    }, () => { if (!this.dead && this.pdf === pdf) { this.toc = { items: [], source: 'none' }; this.renderToc(); this.emit() } })
+  }
+
+  private renderToc(): void {
+    const box = this.q('.pr-toc')
+    if (this.q('.pr-side').hidden || this.sideTab !== 'toc') return
+    box.innerHTML = tocHtml(this.toc)
+    this.tocAt = -1
+    this.syncToc(this.page, null)
+  }
+
+  /** 高亮当前这一节(pdf.js 的 updateviewarea 带着视口顶边落在哪页、页内 PDF 坐标的 y)。 */
+  private syncToc(page: number | undefined, top: number | null | undefined): void {
+    const items = this.toc?.items
+    if (!items?.length || !page) return
+    // 探线在视口顶边往下 64px(跳过去的标题停在 56px 处),换成 PDF 坐标:CSS 像素 = PDF 单位 × 缩放 × 4/3。
+    const at = currentIndex(items, page - 1, top == null ? null : top - 64 / ((this.viewer.currentScale || 1) * 4 / 3))
+    if (at === this.tocAt) return
+    this.tocAt = at
+    const box = this.q('.pr-toc')
+    box.querySelector('.pr-tocitem.on')?.classList.remove('on')
+    const b = box.querySelector<HTMLElement>(`.pr-tocitem[data-v="${at}"]`)
+    b?.classList.add('on')
+    if (b && !box.hidden && !this.q('.pr-side').hidden) b.scrollIntoView({ block: 'nearest' })
+  }
+
+  /** 跳到目录里第 i 条:标题停在离顶边一点的地方(上面浮着工具岛),两屏以内平滑滚过去,落地后那一行闪两下。 */
+  gotoToc(i: number): void {
+    const it = this.toc?.items[i], pv = it && this.viewer.getPageView?.(it.page)
+    if (!it || !pv?.div) return
+    const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(0, it.top)[1]
+    const c = this.container, to = Math.max(0, offsetIn(pv.div, c) + y - 56)
+    c.scrollTo({ top: to, behavior: Math.abs(to - c.scrollTop) <= c.clientHeight * 2 && !reduced() ? 'smooth' : 'auto' })
+    if (it.top == null) return
+    pv.div.querySelector('.pr-flash')?.remove()
+    const f = el(`<div class="pr-flash" style="top:${Math.max(0, y - 4)}px;height:${Math.round(Math.max(18, 22 * (this.viewer.currentScale || 1)))}px"></div>`)
+    pv.div.append(f)
+    // 闪两下、第二下弱一点(DESIGN 的 --flash-duration 1100ms;等滚动落地再闪)。减少动态效果:静静亮一下。
+    if (reduced()) f.style.opacity = '0.6'
+    else f.animate([{ opacity: 0 }, { opacity: 1, offset: 0.18 }, { opacity: 0, offset: 0.45 }, { opacity: 0.7, offset: 0.68 }, { opacity: 0 }], { duration: 1100, delay: 250, easing: 'ease-in-out' })
+    setTimeout(() => f.remove(), 1600)
+  }
+
+  /** 悬浮目录的锚点:一条一个空 div,按「页的位置 + 页内高度」放进滚动层,宿主的悬浮目录拿它们算当前节和轨道刻度。 */
+  private placeAnchors(): void {
+    const box = this.q('.pr-anchors'), items = this.toc?.items
+    if (!items?.length || !this.ftoc) { box.textContent = ''; return }
+    if (box.childElementCount !== items.length) box.innerHTML = items.map((_, i) => `<div data-i="${i}"></div>`).join('')
+    items.forEach((it, i) => {
+      const pv = this.viewer.getPageView?.(it.page)
+      if (!pv?.div) return
+      const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(0, it.top)[1]
+      ;(box.children[i] as HTMLElement).style.top = `${offsetIn(pv.div, this.container) + y}px`
+    })
+  }
+
+  /** 左栏收着时,页面左边浮一条宿主的悬浮目录(没有这个接口的宿主上就不出现);左栏开着时目录已经在那儿,不重复。 */
+  private syncFtoc(): void {
+    const want = !!this.toc && this.toc.items.length >= 2 && this.q('.pr-side').hidden && !!ctx.ui?.mountFloatingToc
+    if (!want) { this.ftoc?.dispose(); this.ftoc = null; this.placeAnchors(); return }
+    this.ftoc ??= ctx.ui!.mountFloatingToc!(this.q('.pr-viewport'), {
+      scrollContainer: this.container, contentRoot: this.q('.pr-anchors'), selector: '[data-i]', label: t('side.toc'), topOffset: 56,
+      itemFromElement: (n) => {
+        const i = Number(n.dataset.i), it = this.toc?.items[i]
+        return it ? { text: it.title, level: it.level + 1, onSelect: () => this.gotoToc(i) } : null
+      },
+    })
+    this.placeAnchors()
+    this.ftoc.refresh()
+  }
+
+  private buildThumbs(): void {
+    if (this.q('.pr-side').hidden || this.thumbsBuilt || !this.pdf) { this.syncThumbs(); return }
     this.thumbsBuilt = true
     const wrap = this.q('.pr-thumbs'), pdf = this.pdf
     wrap.innerHTML = Array.from({ length: pdf.numPages }, (_, i) => `<button class="pr-thumb" data-act="thumb" data-v="${i + 1}"><canvas></canvas><span>${i + 1}</span></button>`).join('')
@@ -1175,14 +1313,14 @@ export class Reader {
           canvas.getContext('2d')!.drawImage(off, 0, 0)
         }).catch(() => { /* 文档已关 */ })
       }
-    }, { root: this.q('.pr-side'), rootMargin: '400px' })
+    }, { root: this.q('.pr-thumbs'), rootMargin: '400px' })
     wrap.querySelectorAll('.pr-thumb').forEach((b) => io.observe(b))
     this.off.push(() => io.disconnect())
     this.syncThumbs()
   }
 
   private syncThumbs(): void {
-    if (this.q('.pr-side').hidden) return
+    if (this.q('.pr-thumbs').hidden || this.q('.pr-side').hidden) return
     for (const b of this.root.querySelectorAll<HTMLElement>('.pr-thumb')) {
       const on = Number(b.dataset.v) === this.page
       if (on && !b.classList.contains('on')) b.scrollIntoView({ block: 'nearest' })
@@ -1221,6 +1359,8 @@ export class Reader {
     this.renderToolbar()
     this.renderFindbar()
     if (this.pdf) this.renderBottombar()
+    if (!this.q('.pr-side').hidden) this.renderSide()
+    if (this.ftoc) { this.ftoc.dispose(); this.ftoc = null; this.syncFtoc() }
     if (this.q('.pr-state').dataset.state !== 'ready') this.setState(this.q('.pr-state').dataset.state as 'loading' | 'error')
     this.closePop()
     this.repaint()
@@ -1233,6 +1373,7 @@ export class Reader {
     // 页面上正打着字的文字框:先收进数据再走。
     this.commitText(document.activeElement as HTMLElement | null)
     this.ink?.dispose()
+    this.ftoc?.dispose()
     for (const f of this.off) { try { f() } catch { /* 收尾不抛 */ } }
     this.mo.disconnect()
     const saved = this.doc ? release(this.doc, this.io) : this.loading

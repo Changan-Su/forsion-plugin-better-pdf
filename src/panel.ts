@@ -1,5 +1,6 @@
 // 右栏的三个视图:批注列表 / 大纲 / 对话。它们不属于某一个标签,跟着「最近操作过的那份 PDF」走。
-import { KIND_ICON, chat, esc, fmtTime, getActive, onActive, type Reader } from './reader'
+import { KIND_ICON, chat, esc, fmtTime, getActive, onActive, tocHtml, type Reader } from './reader'
+import { buildOutline } from './outline'
 import { baseOf } from './store'
 import { icon } from './icons'
 import { locale, t } from './i18n'
@@ -77,20 +78,15 @@ export function mountOutline(host: HTMLElement): () => void {
     if (pdf === shown && lang === locale()) return
     shown = pdf; lang = locale()
     if (!r || !pdf) { host.innerHTML = empty(t('outline.noPdf')); return }
-    void pdf.getOutline().then((outline: any[] | null) => {
-      if (shown !== pdf) return
-      if (!outline?.length) { host.innerHTML = empty(t('outline.empty')); return }
-      const dests: unknown[] = []
-      const walk = (items: any[], depth: number): string => items.map((it) => {
-        dests.push(it.dest)
-        return `<button data-i="${dests.length - 1}" style="padding-left:${8 + depth * 14}px" title="${esc(it.title || '')}">${esc(it.title || t('outline.untitled'))}</button>${it.items?.length ? walk(it.items, depth + 1) : ''}`
-      }).join('')
-      host.innerHTML = `<div class="pr-panel"><div class="pr-outline">${walk(outline, 0)}</div></div>`
-      host.querySelector('.pr-outline')!.addEventListener('click', (e) => {
-        const i = (e.target as HTMLElement).closest<HTMLElement>('[data-i]')?.dataset.i
-        if (i != null && dests[Number(i)] != null) void r.linkService.goToDestination(dests[Number(i)])
-      })
-    }).catch(() => { if (shown === pdf) host.innerHTML = empty(t('outline.empty')) })
+    // 和左栏同一份目录(书签 → 目录页 → 字号),同一个列表。
+    host.innerHTML = `<div class="pr-panel"><div class="pr-outline">${tocHtml(null)}</div></div>`
+    host.querySelector('.pr-outline')!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).closest<HTMLElement>('.pr-tocitem')?.dataset.v
+      if (v != null) r.gotoToc(Number(v))
+    })
+    void buildOutline(pdf).then((toc) => {
+      if (shown === pdf) host.querySelector('.pr-outline')!.innerHTML = tocHtml(toc)
+    }, () => { if (shown === pdf) host.innerHTML = empty(t('outline.empty')) })
   }
   return follow(draw)
 }

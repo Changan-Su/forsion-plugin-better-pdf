@@ -297,5 +297,55 @@ await t('关闭和重开同拍发生:活文档不被移出共享缓存或最后�
   await S.release(reopened); await S.release(another)
 })
 
+// ── 5. 目录(书签 → 目录页 → 字号;假文档,一行 = [字, x, y, 字号]) ──
+const O = await load('./src/outline.ts')
+let fp = 0
+const fakePdf = (pages, { outline = null, dests = {} } = {}) => ({
+  numPages: pages.length, fingerprints: [`fake-${++fp}`],
+  getOutline: async () => outline, getDestination: async (k) => dests[k] ?? null, getPageIndex: async (ref) => ref.num,
+  getPage: async (n) => ({ getTextContent: async () => ({ items: pages[n - 1].map(([str, x, y, h = 10]) => ({ str, transform: [h, 0, 0, h, x, y], height: h, width: str.length * h * 0.5 })) }) }),
+})
+const body = (y) => [`Plain body text that goes on for a while to set the body size ${y}`, 72, y]
+await t('目录 ①:书签里的落点换成页 + 高度(XYZ / FitH / 具名落点),子项降一级', async () => {
+  const pdf = fakePdf([[body(700)], [body(700)], [body(700)]], {
+    outline: [{ title: 'Intro', dest: [{ num: 0 }, { name: 'XYZ' }, 0, 700, null], items: [{ title: 'Detail', dest: 'n1', items: [] }] }],
+    dests: { n1: [{ num: 2 }, { name: 'FitH' }, 500] },
+  })
+  const toc = await O.buildOutline(pdf)
+  A.equal(toc.source, 'bookmarks')
+  A.deepEqual(toc.items, [{ title: 'Intro', level: 0, page: 0, top: 700 }, { title: 'Detail', level: 1, page: 2, top: 500 }])
+  A.equal(await O.buildOutline(pdf), await O.buildOutline(pdf), '同一指纹只算一次')
+})
+await t('目录 ②:没有书签时读「Contents」页:按缩进分级、点线去掉、下标不吞后半句、印的页码换算成第几页(扉页上的同名字不算)', async () => {
+  const pdf = fakePdf([
+    [['Introduction to things', 72, 700, 24]],
+    [['Contents', 72, 740, 24], ['1 Introduction 1', 72, 700], ['1.1 Background . . . . . . 2', 88, 680], ['2 Methods 4', 72, 660],
+      ['2.1 Data . . . . 5', 88, 640], ['2.2 Length l', 88, 620], ['0', 150, 618.2, 7], ['and contraction . . . . 5', 160, 620]],
+    [['1 Introduction', 72, 700, 20], body(650)], [['1.1 Background', 72, 600, 14], body(550)], [body(700)],
+    [['2 Methods', 72, 700, 20], body(650)], [body(700), ['2.1 Data', 72, 500, 14], ['2.2 Length l and contraction', 72, 300, 14]],
+  ])
+  const toc = await O.buildOutline(pdf)
+  A.equal(toc.source, 'contents'); A.equal(toc.contentsPage, 1)
+  A.deepEqual(toc.items.map((i) => [i.title, i.level, i.page, i.top]), [
+    ['1 Introduction', 0, 2, 720], ['1.1 Background', 1, 3, 614], ['2 Methods', 0, 5, 720], ['2.1 Data', 1, 6, 514], ['2.2 Length l and contraction', 1, 6, 314],
+  ])
+})
+await t('目录 ③:都没有时按字号推:大两成以上算标题、最大两档分一 / 二级,折行的标题并成一条,每页都有的页眉不算', async () => {
+  const head = ['My Book', 300, 760, 20]
+  const pdf = fakePdf([
+    [head, ['Chapter 1', 72, 700, 20], ['Getting started', 72, 676, 20], body(640), body(620)],
+    [head, ['A first section', 72, 700, 14], body(660), body(640), ['x', 72, 600, 30]],
+    [head, ['Chapter 2 Results', 72, 700, 20], body(660), ['Tiny caption', 72, 400, 8]],
+  ])
+  const toc = await O.buildOutline(pdf)
+  A.equal(toc.source, 'fonts')
+  A.deepEqual(toc.items.map((i) => [i.title, i.level, i.page]), [['Chapter 1 Getting started', 0, 0], ['A first section', 1, 1], ['Chapter 2 Results', 0, 2]])
+  A.deepEqual(toc.items.map((i) => i.top), [720, 714, 720])
+})
+await t('目录:当前一节 = 最后一个起点在探线之上的', () => {
+  const items = [{ page: 0, top: 700 }, { page: 0, top: 300 }, { page: 2, top: 500 }]
+  A.deepEqual([O.currentIndex(items, 0, 750), O.currentIndex(items, 0, 600), O.currentIndex(items, 1, 400), O.currentIndex(items, 2, 400), O.currentIndex(items, 2, null)], [-1, 0, 1, 2, 2])
+})
+
 console.log(fail.length ? `\n${fail.length} 项没过:${fail.join(';')}` : '\n全部通过')
 process.exit(fail.length ? 1 : 0)

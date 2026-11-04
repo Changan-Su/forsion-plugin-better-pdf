@@ -87,6 +87,11 @@ declare const ctx: {
 
     mountBoard?(el: HTMLElement, opts: HostBoardOptions): HostBoardHandle
     boardToSvg?(scene: HostBoardScene, opts?: { theme?: 'light' | 'dark'; padding?: number }): Promise<{ svg: SVGSVGElement; x: number; y: number; width: number; height: number } | null>
+    /** 2.13.10+。悬浮目录:宿主那套轨道 + 列表,条目来自 contentRoot 里匹配 selector 的元素。 */
+    mountFloatingToc?(shell: HTMLElement, opts: {
+      scrollContainer: HTMLElement; contentRoot?: HTMLElement; selector?: string; label?: string; minItems?: number; hideBelow?: number; topOffset?: number; side?: 'left' | 'right'
+      itemFromElement?(el: HTMLElement, index: number): { text: string; level: number; primary?: boolean; onSelect?(): void } | null
+    }): { refresh(): void; dispose(): void }
     mountSelectionBar?(root: HTMLElement, opts?: {
       view?: string
       tools?: HostSelectionBarTool[]

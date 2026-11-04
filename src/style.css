@@ -65,8 +65,26 @@
 
 /* ── 主体 ── */
 .pr-body { flex: 1 1 auto; display: flex; min-height: 0; }
-.pr-side { flex: 0 0 168px; min-height: 0; overflow: auto; border-right: 1px solid var(--border); background: var(--bg-card, var(--surface)); }
-.pr-thumbs { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-side { flex: 0 0 212px; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-card, var(--surface)); }
+/* 目录 / 缩略图:一对分段钮,样子照宿主的视图切换胶囊(底色一级、选中的一格浮起来)。 */
+.pr-sidetabs { flex: none; display: flex; gap: 2px; margin: 10px 10px 6px; padding: 2px; border-radius: 999px; background: var(--bg-hover); }
+.pr-sidetab { flex: 1 1 0; height: 24px; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+  transition: background-color var(--pill-select-duration, 200ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)), color var(--pill-select-duration, 200ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)); }
+.pr-sidetab.on { background: var(--bg-card, var(--surface)); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.pr-toc, .pr-thumbs { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.pr-toclist { padding: 2px 6px 10px; }
+.pr-tocitem { display: block; width: 100%; padding: 4px 8px 4px calc(8px + var(--l, 0) * 12px); border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted);
+  font: inherit; font-size: var(--ui-font-body, 13px); line-height: 1.45; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-tocitem[style*="--l:0"] { color: var(--text); font-weight: 500; }
+.pr-tocitem:hover { background: var(--bg-hover); }
+.pr-tocitem.on { color: var(--accent-ink, var(--accent)); background: color-mix(in srgb, var(--accent-ink, var(--accent)) 9%, transparent); }
+.pr-tocmsg { padding: 14px 16px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.pr-tocnote { padding: 2px 16px 14px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+/* 跳到目录里一条:那一行闪两下(动画在 reader.ts 的 gotoToc 里)。 */
+.pr-flash { position: absolute; left: 0; right: 0; z-index: 3; pointer-events: none; border-radius: 3px; opacity: 0; background: color-mix(in srgb, var(--accent-ink, var(--accent)) 20%, transparent); }
+.pr-anchors { position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
+.pr-anchors > div { position: absolute; left: 0; width: 1px; height: 1px; }
+.pr-thumbs { padding: 4px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
 .pr-thumb { display: block; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .pr-thumb canvas { display: block; width: 100%; aspect-ratio: 0.77; height: auto; background: #fff; border: 2px solid var(--border); border-radius: 4px; box-sizing: border-box; margin-bottom: 3px; }
 .pr-thumb.on { color: var(--accent-ink, var(--accent)); }
@@ -183,16 +201,14 @@
 .pr-quote { border-left: 2.5px solid var(--c); padding-left: 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .pr-cmt { font-size: var(--ui-font-body, 13px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pr-item .pr-tags span { font-size: var(--ui-font-caption, 11px); line-height: 18px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-muted); }
-.pr-outline { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 6px; font-size: var(--ui-font-body, 13px); }
-.pr-outline button { display: block; width: 100%; padding: 4px 8px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-outline button:hover { background: var(--bg-hover); }
+.pr-outline { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 0; }
 .pr-chat { flex: 1 1 auto; min-height: 0; height: 100%; }
 .pr-inkthumb { display: block; height: 46px; border-radius: 6px; background: #fff; border: 1px solid var(--border); overflow: hidden; }
 .pr-inkthumb svg { width: 100%; height: 100%; }
 
 /* Hosted cards inherit positioning, material and enter/exit motion from ctx.ui.popover. */
 .pr-pop[data-hosted] { position: static; border: 0; box-shadow: none; background: transparent; max-width: min(308px, calc(100vw - 24px)); }
-.pr-btn, .pr-pbtn, .pr-ibtn, .pr-menu button, .pr-outline button, .pr-item {
+.pr-btn, .pr-pbtn, .pr-ibtn, .pr-menu button, .pr-tocitem, .pr-item {
   transition: background-color var(--duration-fast, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)),
     color var(--duration-fast, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)),
     border-color var(--duration-fast, 150ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1));
