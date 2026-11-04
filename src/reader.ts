@@ -1122,7 +1122,8 @@ export class Reader {
       else if (act === 'link') { void navigator.clipboard?.writeText(`[[${baseOf(this.pdfPath)}#page=${this.page}]]`); ctx.notify?.(t('copy.done')) }
     })
     this.showPop(pop, { left: r.right - 200, top: r.top, bottom: r.bottom }, 'below')
-    pop.style.top = `${this.container.scrollTop + 6}px`
+    // 没有宿主浮层的旧版本(2.13.7):这份菜单画在页面的滚动层里,浮在页面上的那几块盖在它上面 —— 摆到顶上那条带子(和查找条)下面。
+    pop.style.top = `${this.container.scrollTop + 56 + (this.q('.pr-findbar').hidden ? 0 : 44)}px`
     pop.style.left = `${this.container.scrollLeft + this.container.clientWidth - pop.offsetWidth - 10}px`
   }
 

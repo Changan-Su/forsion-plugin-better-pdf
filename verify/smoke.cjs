@@ -279,7 +279,7 @@ async function main() {
     const quoted = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S1), 8000)
     check('④b 问 Tangu:引文递进右栏的对话', !!quoted, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
     await win.screenshot({ path: path.join(SHOTS, '2b-ask.png') })
-    // ④c 目录:在左栏(11-03 起),缺省是「目录」那一格;右栏不再自动开「大纲」
+    // ④c 目录:在左栏(11-03 起)。悬浮目录的刻度:2.13.8 起叫 .lcl-ftoc-tick,2.13.7 叫 .lcl-ftoc-bar,缺省是「目录」那一格;右栏不再自动开「大纲」
     check('④c 右栏不再自动开「大纲」', !(await win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab:has([aria-label="大纲"])').count()))
     await win.locator('.pr-toolbar [data-act="side"]').click()
     const nToc = await until(() => win.locator('.pr-toc .pr-tocitem').count().then((c) => c >= 3 && c), 6000)
@@ -289,7 +289,7 @@ async function main() {
     check('④c 点目录跳到那一页、那一行闪一下,那一条亮着', await win.locator('.pr-pageinput').inputValue() === '2' && flashed === 1 && await win.locator('.pr-tocitem.on').getAttribute('data-v') === '1', `flash ${flashed}`)
     await win.locator('.pr-pageinput').fill('1'); await win.locator('.pr-pageinput').press('Enter'); await win.waitForTimeout(600)
     await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(400)
-    const ftoc = await until(() => win.evaluate(() => document.querySelectorAll('.pr-viewport .lcl-ftoc-tick').length || 0), 4000)
+    const ftoc = await until(() => win.evaluate(() => document.querySelectorAll('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').length || 0), 4000)
     check('④c 左栏收起后页面边上浮出宿主的悬浮目录(一条一个刻度)', ftoc >= 3, `刻度 ${ftoc}`)
     await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
 
@@ -299,7 +299,7 @@ async function main() {
     check('④d 查找:数出命中并跳到那一页', !!found && await win.locator('.pr-pageinput').inputValue() === '2', String(found))
     await win.locator('.pr-findbar [data-act="find-close"]').click()
     await win.locator('.pr-toolbar [data-act="side"]').click(); await win.locator('.pr-sidetab[data-v="thumbs"]').click()
-    check('④c 左栏开着时没有悬浮目录', !(await win.locator('.pr-viewport .lcl-ftoc-tick').count()))
+    check('④c 左栏开着时没有悬浮目录', !(await win.locator('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').count()))
     const thumbs = await until(() => win.evaluate(() => { const c = [...document.querySelectorAll('.pr-thumb canvas')]; return c.length === 3 && c[0].width > 100 && c.length }), 6000)
     check('④d 缩略图栏画出三页', thumbs === 3)
     await win.locator('.pr-thumb').first().click(); await win.waitForTimeout(500)
