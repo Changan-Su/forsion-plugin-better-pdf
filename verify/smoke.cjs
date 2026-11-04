@@ -577,7 +577,10 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, '4-overview.png') })
 
     // ⑨ 导出带批注的 PDF
-    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"], .ctx-menu button:has-text("导出带批注的 PDF")').click()
+    // 插件自己的菜单(没有锚点菜单的宿主)在白板层底下,靠悬停改道才点得到:先像人一样把鼠标移过去再点,别从停着的光标直接点
+    const exportItem = win.locator('.pr-menu [data-pop="export"], .ctx-menu button:has-text("导出带批注的 PDF")')
+    const clickExport = async () => { await win.locator('.pr-toolbar [data-act="more"]').click(); const b = await exportItem.boundingBox(); if (b) await win.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 4 }); await exportItem.click() }
+    await clickExport()
     const findExport = () => fs.readdirSync(path.join(vault, FOLDER)).find((f) => f.startsWith('Reading Fixture') && f !== PDF && f.endsWith('.pdf'))
     await until(findExport, 10_000); await win.waitForTimeout(400)
     const exported = findExport()
@@ -588,7 +591,7 @@ async function main() {
     // ⑨b 再导出一次:不覆盖上一份,另起一个编号的名字
     const origRow = () => win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: PDF }) }).first()
     await origRow().click(); await win.waitForSelector('.pr-hl', { timeout: 15_000 }); await win.waitForTimeout(600)
-    await win.locator('.pr-toolbar [data-act="more"]').click(); await win.locator('.pr-menu [data-pop="export"], .ctx-menu button:has-text("导出带批注的 PDF")').click()
+    await clickExport()
     const exportsNow = () => fs.readdirSync(path.join(vault, FOLDER)).filter((f) => f.startsWith('Reading Fixture') && f !== PDF && f.endsWith('.pdf'))
     await until(() => exportsNow().length === 2, 10_000)
     check('⑨b 再导出一次不覆盖上一份', exportsNow().length === 2 && !!exported && Buffer.compare(exBytes, fs.readFileSync(path.join(vault, FOLDER, exported))) === 0, exportsNow().join(' | '))
