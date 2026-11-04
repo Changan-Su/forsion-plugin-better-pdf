@@ -15,7 +15,10 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
   后面是问 Tangu、翻译(结果在选区下面的卡片里)和其他插件加的动作(⋯),和聊天、笔记里是同一条。用的是宿主的 `ctx.ui.mountSelectionBar`;
   2.13.3 及更早的版本上仍是本插件自己的浮条,按钮一样,只是没有翻译和 ⋯。
 - **引用是复制**。「复制引用」把原文、回到这一页的链接(`[[x.pdf#page=3|第 3 页]]`)和评论放进剪贴板,到笔记里自己粘贴;插件不替你建笔记。
-- **右栏**:批注列表、PDF 目录、Tangu 对话三个标签,跟着你最近操作的那份 PDF 走。
+- **工具浮在页面上**:顶上居中的工具岛(抓手 / 选择 / 高亮、下划线、便签、文字 / 形状、手写、橡皮),拿着什么工具,「下一笔」的颜色、笔、粗细就在岛下面那一排;
+  按住空格或用鼠标中键随时拖页面。窄处工具岛停到底下。
+- **目录在左栏**(和缩略图分两格):有书签用书签,没有就读文档里的「Contents / 目录」页,再没有按标题字号推断;左栏收着时页面左边有一条悬浮目录。
+- **右栏**:批注列表、Tangu 对话,跟着你最近操作的那份 PDF 走。
 - **装好是空的**:不带示例 PDF,不带演示批注。
 
 **凡是「打开这份 PDF」都归本插件**(2.13.2 之后的桌面版本):文件树、最近使用、笔记里的 `[[x.pdf]]`,带页码的 `[[x.pdf#page=3]]`(「复制引用」贴出来的就是这种,点回去落在那一页),以及聊天里的引用(落在那一页;带引语的会用查找把那句话标出来,查找条开着,关掉即清)。
@@ -50,6 +53,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 | `src/index.ts` | 入口:接管 `.pdf`、注册右栏三个视图 |
 | `src/reader.ts` | 一份打开着的 PDF:工具栏、页面上的批注层、选中浮条、批注卡、查找、缩略图 |
 | `src/panel.ts` | 右栏:批注列表 / 目录 / 对话 |
+| `src/outline.ts` | 目录:书签 → 文档里的目录页 → 按字号推断(打开时现算,只记在内存里) |
 | `src/store.ts` | 批注的存取(旁挂文件) |
 | `src/ink.ts` | 手写与形状:白板层 + 每页的静态笔迹;选择工具下指针归白板层还是归页面 |
 | `src/export.ts` | 导出带批注的 PDF |
@@ -59,7 +63,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 ## 已知的边界
 
 - PDF 被别的程序改写后不会自动重载,关掉重开。
-- 把标签「移到新窗口」后,那个窗口没有右栏:PDF 和所有批注工具照常用,批注列表 / 目录 / 对话三个面板不出现,工具栏上也不放「面板」按钮;
+- 把标签「移到新窗口」后,那个窗口没有右栏:PDF 和所有批注工具照常用,批注列表 / 对话两个面板不出现(左栏的目录、缩略图照常),工具栏上也不放「面板」按钮;
   在那里点「问 Tangu」按宿主的代码会把这个标签换成对话(点后退回到 PDF),这一条没实测过。要在新窗口里也有面板,得宿主让那种窗口带右栏。
 - 开在对话旁边那一格里时(聊天里点引用、Agent 把 PDF 摆上台)同样没有那三个面板:右栏一开,那一格就被顶掉。批注工具照常用;
   「问 Tangu」在那里走的也是上一条说的那条没实测过的路。
@@ -98,7 +102,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 
 ## English
 
-**Better PDF** is a PDF reader and annotator for Forsion, built for working through papers. Select text to highlight (five preset colors plus any custom color), underline, strike through, comment and tag; place sticky notes and text on the page; draw boxes, ellipses, arrows and lines; write by hand with the seven pens of the whiteboard. The annotation list, the PDF outline and a Tangu chat sit in the right sidebar.
+**Better PDF** is a PDF reader and annotator for Forsion, built for working through papers. Select text to highlight (five preset colors plus any custom color), underline, strike through, comment and tag; place sticky notes and text on the page; draw boxes, ellipses, arrows and lines; write by hand with the seven pens of the whiteboard. Tools float over the page in an island at the top (it docks at the bottom in narrow panes); hold Space or drag with the middle button to pan. The left sidebar holds the contents (from bookmarks, the document's own contents page, or heading sizes) and thumbnails; the annotation list and a Tangu chat sit in the right sidebar.
 
 - **The PDF is never modified.** Annotations live in a hidden file next to it (`.<name>.pdf.annot.json`, in the PDF's own coordinates). "More → Export annotated PDF" saves a separate copy with native PDF annotations.
 - **Handwriting and shapes are whiteboard elements**, so in the select tool they can be picked, moved, resized and box-selected, and the eraser removes anything (with undo). These need a desktop version newer than 2.13.1; on 2.13.1 and earlier the three buttons do not appear and everything else works.

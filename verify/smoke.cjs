@@ -305,6 +305,29 @@ async function main() {
     await win.locator('.pr-thumb').first().click(); await win.waitForTimeout(500)
     await win.locator('.pr-sidetab[data-v="toc"]').click(); await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(800)
 
+    // ④e 浮在页面上的几块(方案 A):宽处工具岛在顶上居中、几块互不压;窄处(< 660px)工具岛停到底下,翻页挪到顶上,缩放收起
+    await win.locator('.pr-toolbar [data-v="highlight"]').click(); await win.waitForTimeout(400)
+    const isles = () => win.evaluate(() => {
+      const r = (q) => { const e = document.querySelector(q); if (!e || !e.offsetWidth) return null; const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom } }
+      const v = r('.pr-viewport'), all = ['.pr-sidecap', '.pr-tools', '.pr-right', '.pr-palette', '.pr-zoomcap', '.pr-pagecap'].map((q) => [q, r(q)]).filter(([, b]) => b)
+      const hit = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b
+      const overlaps = all.flatMap(([qa, a], i) => all.slice(i + 1).filter(([, b]) => hit(a, b)).map(([qb]) => `${qa}×${qb}`))
+      const tools = r('.pr-tools')
+      return { w: document.querySelector('.pr-root').dataset.w ?? '', overlaps, inside: all.every(([, b]) => b.l >= v.l - 1 && b.r <= v.r + 1 && b.t >= v.t - 1 && b.b <= v.b + 1),
+        centred: Math.abs((tools.l + tools.r) / 2 - (v.l + v.r) / 2) < 2, toolsTop: tools.t - v.t, toolsBottom: v.b - tools.b }
+    })
+    const wide = await isles()
+    check('④e 宽处:工具岛在顶上居中,色点那排在它下面,几块互不压、都在阅读区里', !wide.w && wide.centred && wide.toolsTop < 20 && !wide.overlaps.length && wide.inside, JSON.stringify(wide))
+    await win.screenshot({ path: path.join(SHOTS, '4e-wide.png') })
+    await win.evaluate(() => { document.querySelector('.pr-root').style.width = '600px' }); await win.waitForTimeout(600)
+    const dock = await isles()
+    check('④e 窄处:工具岛停到底下居中,色点那排在它上面,翻页挪到顶上,缩放收起,互不压', dock.w === 'dock' && dock.centred && dock.toolsBottom < 20 && !dock.overlaps.length && dock.inside && !(await win.locator('.pr-zoomcap').isVisible()), JSON.stringify(dock))
+    await win.screenshot({ path: path.join(SHOTS, '4e-dock.png') })
+    await win.evaluate(() => { document.querySelector('.pr-root').style.width = '' }); await win.waitForTimeout(600)
+    await win.locator('.pr-toolbar [data-v="select"]').click(); await win.waitForTimeout(300)
+    const ind = await win.evaluate(() => { const i = document.querySelector('.pr-ind').getBoundingClientRect(), b = document.querySelector('.pr-tools [data-v="select"]').getBoundingClientRect(); return Math.abs(i.left - b.left) + Math.abs(i.width - b.width) })
+    check('④e 工具岛上的高亮块停在手上那件工具下面', ind < 2, `偏差 ${ind}`)
+
     // ⑤ 下划线工具:拖着的时候就画出来,松手即成
     await win.locator('.pr-toolbar [data-v="underline"]').click()
     const b5 = await sentenceBox(win, S2)

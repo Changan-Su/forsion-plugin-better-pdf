@@ -176,6 +176,8 @@ export class Reader {
   private pendingPick: { pages: PageQuads[]; text: string } | null = null
   private justMade = 0
   private thumbsBuilt = false
+  /** 工具岛上那块高亮底现在停在哪(px);换工具时从这里滑过去。 */
+  private indX: number | null = null
   /** 目录(打开后现算,见 outline.ts);null = 还在算。 */
   toc: Toc | null = null
   private tocStarted = false
@@ -190,16 +192,18 @@ export class Reader {
   readonly ink: InkLayer | null
 
   constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO) {
+    // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
+    // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
     this.root = el(`<div class="pr-root">
-      <div class="pr-toolbar"></div>
-      <div class="pr-findbar" hidden></div>
       <div class="pr-body">
         <div class="pr-side" hidden><div class="pr-sidetabs" role="tablist"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
           <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div><div class="pr-anchors"></div></div>
           <div class="pr-board"></div>
-          <div class="pr-bottombar" hidden></div>
           <div class="pr-state"></div>
+          <div class="pr-toolbar"></div>
+          <div class="pr-findbar pr-isle" hidden></div>
+          <div class="pr-bottombar" hidden></div>
         </div>
       </div>
     </div>`)
@@ -364,6 +368,9 @@ export class Reader {
     const ro = new ResizeObserver(() => {
       this.hideBar() // 切走标签页、拖分栏:条不跟着这个视图藏起来 / 挪走
       this.sized = container.clientHeight > 0
+      // 窄处(对话旁那一格、分栏)工具岛挪到底下停靠,翻页挪到顶上居中,缩放收起(⌘ + 滚轮照样能缩)。
+      if (container.clientWidth > 0) { if (container.clientWidth < 660) this.root.dataset.w = 'dock'; else delete this.root.dataset.w }
+      if (this.sized) this.slideInd()
       if (this.dead || !this.pdf) return
       const cur = viewer.currentScaleValue
       if (cur === 'page-width' || cur === 'page-fit') viewer.currentScaleValue = cur
@@ -444,7 +451,14 @@ export class Reader {
       return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
     }
     const sep = '<span class="pr-sep"></span>'
-    const tools = this.tools().map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k || (k === 'hand' && this.spaceHeld), k)).join('')
+    // 工具岛:抓手 | 选择 | 划线、便签、文字 | 形状、手写、橡皮,一组一道隔线;按钮角上印着它的字母键。
+    const group = (k: Tool): number => (k === 'hand' ? 0 : k === 'select' ? 1 : BOARD_TOOLS.includes(k) ? 3 : 2)
+    let last = -1
+    const tools = this.tools().map(([k, ic]) => {
+      const g = group(k), cut = last >= 0 && g !== last ? sep : ''
+      last = g
+      return cut + btn('tool', ic, t(`tool.${k}`), this.tool === k || (k === 'hand' && this.spaceHeld), k).replace('</button>', TOOL_KEY[k] ? `<i class="pr-key">${TOOL_KEY[k]}</i></button>` : '</button>')
+    }).join('')
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
     // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
     // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
@@ -453,14 +467,32 @@ export class Reader {
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
     const hadPalette = !!this.q('.pr-palette')
     const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
-    // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
+    // 「下一笔」的那一排(色点,或手写 / 形状的笔、颜色、粗细、撤销)浮在工具岛下面(pr-palette),不挤工具岛:换工具时岛不变宽、页面不跳。
     bar.innerHTML =
-      `<span class="pr-group">${btn('side', 'panel-left', t('tool.side'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
-      (mid ? `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` : '') +
-      `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
-      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
-    if (inking && this.tool !== 'eraser' && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
+      `<span class="pr-group pr-isle pr-sidecap">${btn('side', 'panel-left', t('tool.side'), !this.q('.pr-side').hidden)}</span>` +
+      `<span class="pr-group pr-isle pr-tools"><span class="pr-ind"></span>${tools}</span>` +
+      `<span class="pr-group pr-isle pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
+      `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>` +
+      (mid ? `<span class="pr-group pr-isle pr-palette">${mid}</span>` : '')
+    if (mid && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
+    this.slideInd()
     if (had) (bar.querySelector<HTMLElement>(`[data-act="${f!.dataset.act}"][data-v="${f!.dataset.v ?? ''}"]`) ?? this.container).focus({ preventScroll: true })
+  }
+
+  /** 工具岛上的高亮底:停在手上那件工具下面;换了工具就从上一个位置滑过去(整条是重画的,所以位置自己记着)。 */
+  private slideInd(): void {
+    const isle = this.q('.pr-tools'), ind = isle.querySelector<HTMLElement>('.pr-ind')!
+    const on = isle.querySelector<HTMLElement>(`.pr-tool[data-v="${this.spaceHeld ? 'hand' : this.tool}"]`)
+    if (!on || !on.offsetWidth) { ind.hidden = true; return }
+    const x = on.offsetLeft
+    ind.style.width = `${on.offsetWidth}px`
+    if (this.indX != null && this.indX !== x && !reduced()) {
+      ind.style.transform = `translateX(${this.indX}px)`
+      void ind.offsetWidth
+      ind.style.transition = 'transform var(--pill-select-duration, 200ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1))'
+    }
+    ind.style.transform = `translateX(${x}px)`
+    this.indX = x
   }
 
   /** 一排色点:固定的几种,后面跟着自己挑过的(最近三种;这条批注正用着的不在里面也补上),最后一颗是取色器,什么颜色都行。 */
@@ -588,6 +620,7 @@ export class Reader {
 
   // ── 一次按下到抬起:手写笔模式、橡皮擦批注、点选 / 框选、记撤销 ─────────────────────────
   private onPressDown(ev: PointerEvent): void {
+    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar')) return // 浮在页面上的几块不是页面
     // 抓手:中键随时都是;抓手工具和按住空格时左键也是。按钮、浮层、输入框照常点。
     // 在视口的捕获阶段拦下,页面(选字、便签)和白板层(画)都收不到这一下。
     const grab = ev.button === 1 || (ev.button === 0 && (this.tool === 'hand' || this.spaceHeld))
@@ -1156,12 +1189,12 @@ export class Reader {
     const bar = this.q('.pr-bottombar')
     bar.hidden = !this.pdf
     const zl = (v: string): string => (v === 'page-width' ? t('zoom.fitWidth') : v === 'page-fit' ? t('zoom.fitPage') : `${Math.round(parseFloat(v) * 100)}%`)
-    bar.innerHTML = `<button class="pr-btn" data-act="zoom-out" title="${esc(t('zoom.out'))}" aria-label="${esc(t('zoom.out'))}">${icon('minus', 13)}</button>
+    bar.innerHTML = `<span class="pr-isle pr-zoomcap"><button class="pr-btn" data-act="zoom-out" title="${esc(t('zoom.out'))}" aria-label="${esc(t('zoom.out'))}">${icon('minus', 13)}</button>
       <select class="pr-zoomsel" title="${esc(t('zoom.title'))}" aria-label="${esc(t('zoom.title'))}">${ZOOMS.map((v) => `<option value="${v}">${esc(zl(v))}</option>`).join('')}<option value="custom" hidden></option></select>
-      <button class="pr-btn" data-act="zoom-in" title="${esc(t('zoom.in'))}" aria-label="${esc(t('zoom.in'))}">${icon('plus', 13)}</button><span class="pr-sep"></span>
-      <button class="pr-btn" data-act="prev" title="${esc(t('page.prev'))}" aria-label="${esc(t('page.prev'))}">‹</button>
+      <button class="pr-btn" data-act="zoom-in" title="${esc(t('zoom.in'))}" aria-label="${esc(t('zoom.in'))}">${icon('plus', 13)}</button></span>
+      <span class="pr-isle pr-pagecap"><button class="pr-btn" data-act="prev" title="${esc(t('page.prev'))}" aria-label="${esc(t('page.prev'))}">${icon('chevron-left', 14)}</button>
       <input class="pr-pageinput" title="${esc(t('page.input'))}" aria-label="${esc(t('page.input'))}" inputmode="numeric"><span class="pr-pagetotal"></span>
-      <button class="pr-btn" data-act="next" title="${esc(t('page.next'))}" aria-label="${esc(t('page.next'))}">›</button>`
+      <button class="pr-btn" data-act="next" title="${esc(t('page.next'))}" aria-label="${esc(t('page.next'))}">${icon('chevron-right', 14)}</button></span>`
     bar.querySelector('select')!.addEventListener('change', (e) => { this.viewer.currentScaleValue = (e.target as HTMLSelectElement).value })
     bar.querySelector('input')!.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return
