@@ -10,13 +10,15 @@ import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
 
 export const COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5']
-type Tool = 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
+type Tool = 'hand' | 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
 const TOOLS: [Tool, string][] = [
-  ['select', 'mouse-pointer-2'], ['highlight', 'highlighter'], ['underline', 'underline'], ['note', 'sticky-note'],
+  ['hand', 'hand'], ['select', 'mouse-pointer-2'], ['highlight', 'highlighter'], ['underline', 'underline'], ['note', 'sticky-note'],
   ['text', 'type'], ['shape', 'shapes'], ['ink', 'pen-line'], ['eraser', 'eraser'],
 ]
 /** 归白板层的三个工具:宿主没有白板层接口时不出现。 */
 const BOARD_TOOLS: Tool[] = ['shape', 'ink', 'eraser']
+/** 用得上「颜色」的工具:只有拿着它们时工具栏才出色点(选择、抓手、橡皮下点了色点什么都不变)。 */
+const COLOR_TOOLS: Tool[] = ['highlight', 'underline', 'note', 'text']
 /** 工具的字母键,照宿主白板的来(V 选择、P / X 笔、E 橡皮、R O A L 四种形状、T 文字);高亮、下划线、便签是我们自己的,另取 H U N。
  *  白板层的工具由我们定死,引擎因此不认它自己的快捷键,得我们来接。数字键另算:按工具栏上的顺序,0 也是橡皮。 */
 const KEY_TOOL: Record<string, [Tool, HostBoardShape?]> = {
@@ -121,6 +123,10 @@ export class Reader {
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
   private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; hit: string | null; shift: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
   /** 落在白板层上、被我们拿来滚页面的那根手指(far = 离落点最远到过多远:没怎么动就是一次轻点)。 */
+  /** 抓手拖动中(抓手工具、按住空格、中键):按下时的位置和滚动位置。 */
+  private pan: { id: number; x: number; y: number; sl: number; st: number; far: number } | null = null
+  /** 空格按着:任何工具下临时当抓手,松开回原工具(白板的规矩)。 */
+  private spaceHeld = false
   private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number } | null = null
   /** 笔尖正按在页面上(这时落下来的多半是手掌,不拿它滚页面)。 */
   private penDown = false
@@ -306,6 +312,12 @@ export class Reader {
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKey(ev))
     // 捕获阶段:白板引擎的键盘处理挂在它自己的容器上,删除 / 撤销要赶在它前面看到。
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKeyFirst(ev), { capture: true })
+    // 空格松开可能已经不在这个阅读器里(焦点挪走了),在 window 上收;窗口失焦也收,免得卡在抓手上。
+    on(window, 'keyup', (ev: KeyboardEvent) => { if (ev.key === ' ') this.setSpace(false) }, { capture: true })
+    on(window, 'blur', () => this.setSpace(false))
+    // 中键在 Windows / Linux 上默认是自动滚动、在链接上是新标签打开:我们拿它拖页面,两样都拦下。
+    on(this.q('.pr-viewport'), 'mousedown', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
+    on(this.q('.pr-viewport'), 'auxclick', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
     // 白板层盖在页面上面,指针落在它身上时容器听不到:这几个在外层的捕获阶段听。
     const vp = this.q('.pr-viewport')
     on(vp, 'pointerdown', (ev: PointerEvent) => this.onPressDown(ev), { capture: true })
@@ -397,9 +409,11 @@ export class Reader {
       return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
     }
     const sep = '<span class="pr-sep"></span>'
-    const tools = this.tools().map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k, k)).join('')
+    const tools = this.tools().map(([k, ic]) => btn('tool', ic, t(`tool.${k}`), this.tool === k || (k === 'hand' && this.spaceHeld), k)).join('')
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
-    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : this.dotsHtml(this.color, 'color')
+    // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
+    // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
+    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? this.dotsHtml(this.color, 'color') : ''
     // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
     const hadPalette = !!this.q('.pr-palette')
@@ -407,7 +421,7 @@ export class Reader {
     // 手写 / 形状的那一排(笔、颜色、粗细、撤销)太长,不放进工具栏:浮在页面上方(pr-palette)。工具栏因此总是一行,换工具时页面不跟着跳。
     bar.innerHTML =
       `<span class="pr-group">${btn('thumbs', 'panel-left', t('tool.thumbs'), !this.q('.pr-side').hidden)}${sep}${tools}</span>` +
-      `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` +
+      (mid ? `<span class="pr-group${inking && this.tool !== 'eraser' ? ' pr-palette' : ''}">${sep}${mid}</span>` : '') +
       `<span class="pr-group pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>`
     if (inking && this.tool !== 'eraser' && !hadPalette) this.q('.pr-palette')?.setAttribute('data-motion', 'enter')
@@ -424,6 +438,14 @@ export class Reader {
   }
 
   private tools(): [Tool, string][] { return TOOLS.filter(([k]) => this.ink || !BOARD_TOOLS.includes(k)) }
+
+  /** 空格按下 / 松开。松开时正拖着的那一下照常拖完(pan 自己在抬起时收)。 */
+  private setSpace(on: boolean): void {
+    if (this.spaceHeld === on) return
+    this.spaceHeld = on
+    this.root.toggleAttribute('data-grab', on)
+    this.renderToolbar()
+  }
 
   /** 橡皮和上一个工具来回换(E 键、手写笔模式下手指连点两下):白板的规矩。 */
   private toggleEraser(): void { this.setTool(this.tool === 'eraser' ? this.beforeEraser : 'eraser') }
@@ -531,6 +553,16 @@ export class Reader {
 
   // ── 一次按下到抬起:手写笔模式、橡皮擦批注、点选 / 框选、记撤销 ─────────────────────────
   private onPressDown(ev: PointerEvent): void {
+    // 抓手:中键随时都是;抓手工具和按住空格时左键也是。按钮、浮层、输入框照常点。
+    // 在视口的捕获阶段拦下,页面(选字、便签)和白板层(画)都收不到这一下。
+    const grab = ev.button === 1 || (ev.button === 0 && (this.tool === 'hand' || this.spaceHeld))
+    if (grab && !this.pan && !inPop(ev) && !(ev.target as HTMLElement).closest('button, input, select, label, textarea, [contenteditable], .pr-bottombar, .pr-palette')) {
+      ev.preventDefault(); ev.stopPropagation()
+      this.pan = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, sl: this.container.scrollLeft, st: this.container.scrollTop, far: 0 }
+      this.root.dataset.panning = ''
+      this.closePop(); this.hideBar()
+      return
+    }
     if (ev.pointerType === 'pen') { this.penDown = true; penSeen = true; if (!penMode) setPenMode(true); else if (!this.q('[data-act="penmode"]')) this.renderToolbar() }
     const onBoard = !!this.ink?.owns(ev.target)
     // 手指落在白板层上,而这一下不该是「画」:手写笔模式开着(手指从不画),或者是选择工具
@@ -562,6 +594,15 @@ export class Reader {
   }
 
   private onPressMove(ev: PointerEvent): void {
+    const g = this.pan
+    if (g && ev.pointerId === g.id) {
+      ev.stopPropagation()
+      const c = this.container, z = c.offsetWidth ? c.getBoundingClientRect().width / c.offsetWidth : 1 // 界面缩放下指针挪 1 像素 ≠ 滚 1 像素
+      c.scrollLeft = g.sl - (ev.clientX - g.x) / z
+      c.scrollTop = g.st - (ev.clientY - g.y) / z
+      g.far = Math.max(g.far, Math.hypot(ev.clientX - g.x, ev.clientY - g.y))
+      return
+    }
     const f = this.finger
     if (f && ev.pointerType === 'touch') {
       ev.stopPropagation()
@@ -579,6 +620,14 @@ export class Reader {
   }
 
   private onPressUp(ev: PointerEvent): void {
+    const g = this.pan
+    if (g && ev.pointerId === g.id) {
+      ev.stopPropagation()
+      this.pan = null
+      delete this.root.dataset.panning
+      if (g.far > 4) this.justMade = performance.now() // 拖完松手跟着的那一下 click 不算点批注
+      return
+    }
     if (ev.pointerType === 'pen') this.penDown = false
     const f = this.finger
     if (f && ev.pointerType === 'touch') {
@@ -698,13 +747,17 @@ export class Reader {
     // Esc 也一样:焦点在白板上时引擎自己收下、不往上冒。我们有事可做(收浮层、关查找、回到选择工具)就先做并拦下;没事可做再给它(放下它选中的东西)。
     if (ev.key === 'Escape' && this.ink?.owns(ev.target)) { this.onKey(ev); return }
     if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
+    // 空格 = 临时抓手。在捕获阶段拦下:焦点在白板层上时引擎也拿空格当抓手,它挪的是自己的画布、和页面对不上。
+    // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
+    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
       ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
       return
     }
     if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
-      const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools()[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
+      // 数字键不算抓手(和白板一样,1 是选择)
+      const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools().filter(([x]) => x !== 'hand')[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
       if (tool && (this.ink || !BOARD_TOOLS.includes(tool))) {
         ev.preventDefault(); ev.stopPropagation()
         if (shape) this.ink!.setShape(shape)

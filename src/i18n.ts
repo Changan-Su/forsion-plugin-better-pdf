@@ -5,6 +5,7 @@ const M: Record<string, [string, string]> = {
   'view.chat': ['Tangu', 'Tangu'],
 
   'tool.thumbs': ['缩略图', 'Thumbnails'],
+  'tool.hand': ['抓手(按住空格临时切换)', 'Hand (hold Space)'],
   'tool.select': ['选择', 'Select'],
   'tool.highlight': ['高亮', 'Highlight'],
   'tool.underline': ['下划线', 'Underline'],

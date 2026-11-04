@@ -695,6 +695,8 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, '12-custom-colour-card.png') })
     await win.keyboard.press('Escape'); await win.waitForTimeout(250)
     check('⑯b 批注卡上换完颜色,Esc 照样关得掉它(那一排色点重画之后键盘焦点没有掉出去)', await win.locator('.pr-card').count() === 0)
+    // 工具栏的色点只在用得上颜色的工具下才有(11-03):先拿起高亮
+    await win.locator('.pr-toolbar [data-act="tool"][data-v="highlight"]').click(); await win.waitForTimeout(150)
     await win.locator('.pr-toolbar input[type="color"][data-color="color"]').fill(C3); await win.waitForTimeout(250)
     const bar = await win.evaluate(() => ({ on: document.querySelector('.pr-toolbar .pr-dot.on')?.dataset.v, dots: [...document.querySelectorAll('.pr-toolbar .pr-dot[data-v]')].map((d) => d.dataset.v), rows: Math.round(document.querySelector('.pr-toolbar').getBoundingClientRect().height / document.querySelector('.pr-toolbar .pr-tool').getBoundingClientRect().height), kept: localStorage.getItem('forsion-pdf-reader.colors') }))
     check('⑯b 工具栏上挑的成了当前颜色;最近挑过的三种排在固定色点后面,记得住;工具栏仍是一行', bar.on === C3 && bar.dots.slice(-3).join() === [C3, C2, C1].join() && bar.dots.length === 8 && bar.rows === 1 && bar.kept === JSON.stringify([C3, C2, C1]), JSON.stringify(bar))
@@ -774,6 +776,41 @@ async function main() {
       await win.locator('.pr-toolbar [data-act="penmode"]').click(); await win.waitForTimeout(1500)
     }
     await press('v'); await win.evaluate(() => window.getSelection().removeAllRanges())
+
+    // ⑰ 11-03 改版第一刀:色点只给用得上颜色的工具;抓手(抓手工具 / 按住空格 / 中键)拖页面,不选字、不画、不落批注。
+    const dotsAt = async (k) => { await press(k); return win.locator('.pr-toolbar .pr-dot').count() }
+    const dv = await dotsAt('v'), dh = await dotsAt('h'), du = await dotsAt('u'), de = inkOn ? await dotsAt('e') : 0
+    if (inkOn) await press('e') // 再按一次 E 回到上一个工具
+    await press('v')
+    check('⑰a 色点只在高亮 / 下划线这类工具下出现:选择、橡皮下工具栏没有色点', dv === 0 && dh > 0 && du > 0 && de === 0, JSON.stringify({ dv, dh, du, de }))
+    const cbox = await win.locator('.pr-container').boundingBox()
+    const st = () => win.evaluate(() => document.querySelector('.pr-container').scrollTop)
+    const drag = async (button, dy) => {
+      const x = cbox.x + cbox.width * 0.5, y = cbox.y + cbox.height * 0.55
+      await win.mouse.move(x, y); await win.mouse.down({ button }); await win.mouse.move(x, y - dy / 2, { steps: 4 }); await win.mouse.move(x, y - dy, { steps: 4 }); await win.mouse.up({ button }); await win.waitForTimeout(300)
+    }
+    await win.evaluate(() => { document.querySelector('.pr-container').scrollTop = 0 }); await win.waitForTimeout(300)
+    const g0 = annN(), s0 = await st()
+    await win.locator('.pr-toolbar [data-act="tool"][data-v="hand"]').click(); await win.waitForTimeout(200)
+    await drag('left', 200); const s1 = await st()
+    const flat = () => win.evaluate(() => window.getSelection().isCollapsed)
+    check('⑰b 抓手工具:往上拖,页面往下滚了差不多拖的距离;没选中字、没新批注', s1 - s0 > 150 && s1 - s0 < 260 && await flat() && annN() === g0, JSON.stringify({ s0, s1 }))
+    await press('v')
+    await win.keyboard.down('Space'); await win.waitForTimeout(150)
+    const grabOn = await win.evaluate(() => { const r = document.querySelector('.pr-root'); return [r.hasAttribute('data-grab'), document.querySelector('.pr-toolbar [data-v="hand"]').classList.contains('on'), r.dataset.tool].join() })
+    await drag('left', -150); const s2 = await st()
+    await win.keyboard.up('Space'); await win.waitForTimeout(150)
+    const grabOff = await win.evaluate(() => { const r = document.querySelector('.pr-root'); return [r.hasAttribute('data-grab'), r.dataset.tool].join() })
+    check('⑰c 选择工具下按住空格拖:页面跟着走、抓手亮;松开空格回到选择,没选中字、没新批注', grabOn === 'true,true,select' && s1 - s2 > 100 && grabOff === 'false,select' && await flat() && annN() === g0, JSON.stringify({ grabOn, grabOff, s1, s2 }))
+    const s3 = await st(); await drag('middle', 120); const s4 = await st()
+    check('⑰d 中键拖:选择工具下也是拖页面', s4 - s3 > 80 && await flat() && annN() === g0, JSON.stringify({ s3, s4 }))
+    if (inkOn) {
+      await press('p'); await win.waitForTimeout(800); const k0 = inkN(), s5 = await st()
+      await win.keyboard.down('Space'); await drag('left', 120); await win.keyboard.up('Space'); await win.waitForTimeout(700)
+      const s6 = await st()
+      check('⑰e 手写时按住空格拖:拖的是页面,没画出一笔;松开还是手写', s6 - s5 > 80 && inkN() === k0 && await tool() === 'ink', JSON.stringify({ s5, s6, ink: [k0, inkN()] }))
+      await press('v')
+    }
     } // parity
 
     full: {

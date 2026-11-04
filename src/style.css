@@ -135,6 +135,10 @@
 .pr-root.pr-inking:not(.pr-scrolling) .pr-ink { visibility: hidden; }
 .pr-root:not(.pr-inking) .pr-board, .pr-root.pr-scrolling .pr-board { visibility: hidden; }
 
+/* 抓手:抓手工具、按住空格、拖动中。整块视口(连文字层、白板层)都换成手,别让字上的 I 形光标露出来。 */
+.pr-root:is([data-tool="hand"], [data-grab]) .pr-viewport, .pr-root:is([data-tool="hand"], [data-grab]) .pr-viewport :is(.textLayer, .textLayer *, .pr-board, .pr-board *) { cursor: grab !important; }
+.pr-root[data-panning] .pr-viewport, .pr-root[data-panning] .pr-viewport * { cursor: grabbing !important; user-select: none; }
+.pr-root[data-tool="hand"] .textLayer { pointer-events: none; }
 .pr-root[data-tool="note"] .pdfViewer .page, .pr-root[data-tool="text"] .pdfViewer .page { cursor: copy; }
 .pr-root:is([data-tool="note"], [data-tool="text"]) .textLayer { pointer-events: none; }
 /* 高亮 / 下划线工具:拖的时候看到的就是松手后的样子(.pr-ghosts),浏览器自己的选区底色藏起来。 */
