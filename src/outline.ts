@@ -13,6 +13,8 @@ export interface TocItem {
   page: number
   /** 标题那一行顶边在 PDF 坐标里的 y(原点在页底);不知道就是 null,跳到页顶。 */
   top: number | null
+  /** 同一点的 x:页面转过 90° 时屏上的上下由它定。 */
+  x?: number
 }
 export interface Toc { items: TocItem[]; source: 'bookmarks' | 'contents' | 'fonts' | 'none'; contentsPage?: number }
 
@@ -46,8 +48,8 @@ const letters = (s: string): string => s.toLowerCase().replace(/[^\p{L}]/gu, '')
 const hasWords = (s: string): boolean => (s.match(/\p{L}/gu)?.length ?? 0) >= 2
 
 // ── ① 书签 ───────────────────────────────────────────────────────────────────────
-async function fromBookmarks(pdf: any): Promise<TocItem[]> {
-  const raw: any[] | null = await pdf.getOutline().catch(() => null)
+async function fromBookmarks(pdf: any, fail: () => void): Promise<TocItem[]> {
+  const raw: any[] | null = await pdf.getOutline().catch(() => { fail(); return null })
   const out: TocItem[] = []
   const walk = async (list: any[], level: number): Promise<void> => {
     for (const it of list) {
@@ -57,7 +59,8 @@ async function fromBookmarks(pdf: any): Promise<TocItem[]> {
           const page = typeof d[0] === 'number' ? d[0] : await pdf.getPageIndex(d[0])
           const kind = d[1]?.name
           const top = kind === 'XYZ' ? d[3] : kind === 'FitH' || kind === 'FitBH' ? d[2] : null
-          out.push({ title: String(it.title || '').trim(), level: Math.min(level, 5), page, top: typeof top === 'number' ? top : null })
+          const x = kind === 'XYZ' && typeof d[2] === 'number' ? d[2] : undefined
+          out.push({ title: String(it.title || '').trim(), level: Math.min(level, 5), page, top: typeof top === 'number' ? top : null, ...(x != null && { x }) })
         }
       } catch { /* 指向不存在的页:跳过这一条 */ }
       if (it.items?.length) await walk(it.items, level + 1)
@@ -114,7 +117,7 @@ async function fromContents(pdf: any, lines: (i: number) => Promise<Line[]>): Pr
     const page = e.n - 1 + offset
     if (page < 0 || page >= n) continue
     const head = await headOn(e.title, page)
-    items.push({ title: e.title, level: level(e.x), page, top: head ? head.y + head.size : null })
+    items.push({ title: e.title, level: level(e.x), page, top: head ? head.y + head.size : null, ...(head && { x: head.x }) })
   }
   return items.length >= 3 ? { items, at } : null
 }
@@ -132,14 +135,15 @@ async function fromFonts(pdf: any, lines: (i: number) => Promise<Line[]>): Promi
   }
   if (!chars.size) return []
   const body = [...chars].sort((a, b) => b[1] - a[1])[0][0]
-  // 每页都有的页眉页脚、书名不算标题。
+  // 每页都有的页眉页脚、书名不算标题。数字留着比:「Chapter 1」「Chapter 2」只剩字母就成了同一句。
+  const same = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')
   const seen = new Map<string, number>()
-  for (const ls of pages) for (const k of new Set(ls.map((l) => letters(l.text)))) seen.set(k, (seen.get(k) ?? 0) + 1)
+  for (const ls of pages) for (const k of new Set(ls.map((l) => same(l.text)))) seen.set(k, (seen.get(k) ?? 0) + 1)
   type Cand = Line & { page: number }
   const cands: Cand[] = []
   pages.forEach((ls, page) => {
     for (const l of ls) {
-      if (l.size < body * 1.22 || l.text.length > 120 || !hasWords(l.text) || (seen.get(letters(l.text)) ?? 0) > 2) continue
+      if (l.size < body * 1.22 || l.text.length > 120 || !hasWords(l.text) || (seen.get(same(l.text)) ?? 0) > 2) continue
       // 同一页上紧挨着、同字号的两行是一个标题折了行(「Chapter 1」+「Special Relativity」)。
       const prev = cands[cands.length - 1]
       if (prev && prev.page === page && Math.abs(prev.size - l.size) < 0.5 && prev.y - l.y <= l.size * 1.8) { prev.text += ` ${l.text}`; prev.y = l.y; continue }
@@ -148,26 +152,33 @@ async function fromFonts(pdf: any, lines: (i: number) => Promise<Line[]>): Promi
   })
   const sizes = [...new Set(cands.map((c) => Math.round(c.size * 2) / 2))].sort((a, b) => b - a).slice(0, 2)
   let items = cands.filter((c) => sizes.includes(Math.round(c.size * 2) / 2))
-    .map((c) => ({ title: c.text, level: sizes.indexOf(Math.round(c.size * 2) / 2), page: c.page, top: c.end }))
+    .map((c) => ({ title: c.text, level: sizes.indexOf(Math.round(c.size * 2) / 2), page: c.page, top: c.end, x: c.x }))
   if (items.length > 300) items = items.filter((i) => i.level === 0)
   return items
 }
 
-// ponytail: 只记最近 20 份,按指纹;重开同一份不再算。
-const cache = new Map<string, Promise<Toc>>()
+// ponytail: 只记最近 20 份算全了的,按两个指纹(原始 ID + 修改 ID:在别处改过的 PDF 原始 ID 不变);重开同一份不再算。
+const cache = new Map<string, Toc>()
+/** 正在算的:按文档对象记(关掉重开是另一个对象,不接前一个半路被打断的那份)。 */
+const pending = new WeakMap<object, Promise<Toc>>()
 
 export function buildOutline(pdf: any): Promise<Toc> {
-  const key = String(pdf.fingerprints?.[0] ?? '')
+  const key = ((pdf.fingerprints ?? []) as (string | null)[]).filter(Boolean).join(':')
   const hit = key ? cache.get(key) : undefined
-  if (hit) return hit
+  if (hit) return Promise.resolve(hit)
+  const busy = pending.get(pdf)
+  if (busy) return busy
+  // 读不出页 / 读不出书签(多半是文档在半路被关了):照样算完给这一次用,但不进缓存,下次打开重算。
+  let partial = false
+  const fail = (): void => { partial = true }
   const run = (async (): Promise<Toc> => {
     const memo = new Map<number, Promise<Line[]>>()
     const lines = (i: number): Promise<Line[]> => {
       let p = memo.get(i)
-      if (!p) { p = readLines(pdf, i).catch(() => []); memo.set(i, p) }
+      if (!p) { p = readLines(pdf, i).catch(() => { fail(); return [] }); memo.set(i, p) }
       return p
     }
-    const marks = await fromBookmarks(pdf)
+    const marks = await fromBookmarks(pdf, fail)
     if (marks.length >= 2) return { items: marks, source: 'bookmarks' }
     const contents = await fromContents(pdf, lines)
     if (contents) return { items: contents.items, source: 'contents', contentsPage: contents.at }
@@ -175,11 +186,13 @@ export function buildOutline(pdf: any): Promise<Toc> {
     if (fonts.length >= 2) return { items: fonts, source: 'fonts' }
     return marks.length ? { items: marks, source: 'bookmarks' } : { items: [], source: 'none' }
   })()
-  if (key) {
-    cache.set(key, run)
+  pending.set(pdf, run)
+  void run.then((toc) => {
+    pending.delete(pdf)
+    if (!key || partial) return
+    cache.set(key, toc)
     if (cache.size > 20) cache.delete(cache.keys().next().value!)
-    run.catch(() => cache.delete(key))
-  }
+  }, () => pending.delete(pdf))
   return run
 }
 

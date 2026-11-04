@@ -229,7 +229,8 @@
 /* ── 窄处(< 660px,reader.ts 按容器宽度设 data-w="dock"):工具岛停到底下居中,「下一笔」那排在它上面;
    翻页挪到顶上居中,缩放收起。放在文件末尾:同特异性的覆盖得排在基础规则后面(DESIGN §7)。 */
 .pr-root[data-w="dock"] .pr-toolbar { height: auto; bottom: 12px; }
-.pr-root[data-w="dock"] .pr-tools { position: absolute; left: 0; right: 0; bottom: 0; margin: 0 auto; width: fit-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+/* grid-column: auto:绝对定位的格子子元素写了 grid-column 的话,定位参照是那一列(中间那列此时宽 0),居中就偏到右半边 */
+.pr-root[data-w="dock"] .pr-tools { grid-column: auto; position: absolute; left: 0; right: 0; bottom: 0; margin: 0 auto; width: fit-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .pr-root[data-w="dock"] .pr-palette { top: auto; bottom: 46px; }
 .pr-root[data-w="dock"] .pr-bottombar { top: 12px; bottom: auto; justify-content: center; }
 .pr-root[data-w="dock"] .pr-zoomcap { display: none; }

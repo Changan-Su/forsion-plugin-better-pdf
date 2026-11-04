@@ -313,8 +313,13 @@ await t('目录 ①:书签里的落点换成页 + 高度(XYZ / FitH / 具名落�
   })
   const toc = await O.buildOutline(pdf)
   A.equal(toc.source, 'bookmarks')
-  A.deepEqual(toc.items, [{ title: 'Intro', level: 0, page: 0, top: 700 }, { title: 'Detail', level: 1, page: 2, top: 500 }])
+  A.deepEqual(toc.items, [{ title: 'Intro', level: 0, page: 0, top: 700, x: 0 }, { title: 'Detail', level: 1, page: 2, top: 500 }])
   A.equal(await O.buildOutline(pdf), await O.buildOutline(pdf), '同一指纹只算一次')
+  // 在别处改过的同一份 PDF:原始 ID 不变、修改 ID 变了,目录要重算
+  const edited = fakePdf([[body(700)]], { outline: [{ title: 'New', dest: [{ num: 0 }, { name: 'Fit' }], items: [] }, { title: 'Also', dest: [{ num: 0 }, { name: 'Fit' }], items: [] }] })
+  pdf.fingerprints = ['same-doc', 'v1']; edited.fingerprints = ['same-doc', 'v2']
+  await O.buildOutline(pdf)
+  A.deepEqual((await O.buildOutline(edited)).items.map((i) => i.title), ['New', 'Also'])
 })
 await t('目录 ②:没有书签时读「Contents」页:按缩进分级、点线去掉、下标不吞后半句、印的页码换算成第几页(扉页上的同名字不算)', async () => {
   const pdf = fakePdf([
@@ -341,6 +346,21 @@ await t('目录 ③:都没有时按字号推:大两成以上算标题、最大�
   A.equal(toc.source, 'fonts')
   A.deepEqual(toc.items.map((i) => [i.title, i.level, i.page]), [['Chapter 1 Getting started', 0, 0], ['A first section', 1, 1], ['Chapter 2 Results', 0, 2]])
   A.deepEqual(toc.items.map((i) => i.top), [720, 714, 720])
+})
+await t('目录 ③:「Chapter 1 / 2 / 3」这种只差数字的标题不当页眉去掉', async () => {
+  const pdf = fakePdf([1, 2, 3, 4].map((n) => [[`Chapter ${n}`, 72, 700, 20], body(650), body(630)]))
+  A.deepEqual((await O.buildOutline(pdf)).items.map((i) => i.title), ['Chapter 1', 'Chapter 2', 'Chapter 3', 'Chapter 4'])
+})
+await t('目录:半路读不出页(文档被关)的结果不进缓存,下次重算', async () => {
+  const pdf = fakePdf([[['Contents', 72, 740, 24]], [body(700)]])
+  let broken = true
+  const real = pdf.getPage
+  pdf.getPage = async (n) => { if (broken) throw new Error('destroyed'); return real(n) }
+  const p1 = O.buildOutline(pdf)
+  A.equal((await p1).source, 'none')
+  broken = false
+  const p2 = O.buildOutline(pdf)
+  A.notEqual(p2, p1, '重算了'); A.equal(O.buildOutline(pdf), p2, '读全了的这次进了缓存')
 })
 await t('目录:当前一节 = 最后一个起点在探线之上的', () => {
   const items = [{ page: 0, top: 700 }, { page: 0, top: 300 }, { page: 2, top: 500 }]

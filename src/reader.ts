@@ -149,6 +149,7 @@ export class Reader {
   private pan: { id: number; x: number; y: number; sl: number; st: number; far: number } | null = null
   /** 空格按着:任何工具下临时当抓手,松开回原工具(白板的规矩)。 */
   private spaceHeld = false
+  private panEnd = 0
   private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number } | null = null
   /** 笔尖正按在页面上(这时落下来的多半是手掌,不拿它滚页面)。 */
   private penDown = false
@@ -355,6 +356,8 @@ export class Reader {
     // 中键在 Windows / Linux 上默认是自动滚动、在链接上是新标签打开:我们拿它拖页面,两样都拦下。
     on(this.q('.pr-viewport'), 'mousedown', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
     on(this.q('.pr-viewport'), 'auxclick', (ev: MouseEvent) => { if (ev.button === 1) ev.preventDefault() }, { capture: true })
+    // 拖页面是从 PDF 里的链接上开始的:松手那一下浏览器照样补一个 click,pdf.js 会跟着跳走。拖过了就吞掉它。
+    on(this.q('.pr-viewport'), 'click', (ev: MouseEvent) => { if (performance.now() - this.panEnd < 400) { ev.preventDefault(); ev.stopPropagation() } }, { capture: true })
     // 白板层盖在页面上面,指针落在它身上时容器听不到:这几个在外层的捕获阶段听。
     const vp = this.q('.pr-viewport')
     on(vp, 'pointerdown', (ev: PointerEvent) => this.onPressDown(ev), { capture: true })
@@ -693,7 +696,7 @@ export class Reader {
       ev.stopPropagation()
       this.pan = null
       delete this.root.dataset.panning
-      if (g.far > 4) this.justMade = performance.now() // 拖完松手跟着的那一下 click 不算点批注
+      if (g.far > 4) this.justMade = this.panEnd = performance.now() // 拖完松手跟着的那一下 click 不算点批注、也不算点链接
       return
     }
     if (ev.pointerType === 'pen') this.penDown = false
@@ -1283,7 +1286,7 @@ export class Reader {
   gotoToc(i: number): void {
     const it = this.toc?.items[i], pv = it && this.viewer.getPageView?.(it.page)
     if (!it || !pv?.div) return
-    const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(0, it.top)[1]
+    const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(it.x ?? 0, it.top)[1]
     const c = this.container, to = Math.max(0, offsetIn(pv.div, c) + y - 56)
     c.scrollTo({ top: to, behavior: Math.abs(to - c.scrollTop) <= c.clientHeight * 2 && !reduced() ? 'smooth' : 'auto' })
     if (it.top == null) return
@@ -1304,7 +1307,7 @@ export class Reader {
     items.forEach((it, i) => {
       const pv = this.viewer.getPageView?.(it.page)
       if (!pv?.div) return
-      const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(0, it.top)[1]
+      const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(it.x ?? 0, it.top)[1]
       ;(box.children[i] as HTMLElement).style.top = `${offsetIn(pv.div, this.container) + y}px`
     })
   }

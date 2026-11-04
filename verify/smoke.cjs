@@ -542,14 +542,18 @@ async function main() {
       const onP2 = () => readSidecar().annots.some((a) => a.page === 1 && a.type === 'highlight')
       const madeP2 = onP2()
       await win.locator('.pr-toolbar [data-v="eraser"]').click(); await win.waitForTimeout(400)
-      const bar = await win.locator('.pr-bottombar').boundingBox(), kz = Number(process.env.UI_ZOOM) || 1
+      const kz = Number(process.env.UI_ZOOM) || 1
       let b4 = await sentenceBox(win, S4, 2)
+      // 浮着的几块在四角(方案 A),这句话不一定正好在哪一块后面:把左下那块(缩放)平移到这句话的横向范围里,只挪位置
+      await win.evaluate((x) => { const c = document.querySelector('.pr-zoomcap'), r = c.getBoundingClientRect(), z = r.width / c.offsetWidth; c.style.transform = `translateX(${(x - r.left) / z}px)` }, b4.left + 20)
+      const bar = await win.locator('.pr-zoomcap').boundingBox()
       await win.evaluate((dy) => document.querySelector('.pr-container').scrollBy(0, dy), (b4.y0 - (bar.y + bar.height / 2)) / kz); await win.waitForTimeout(700)
       b4 = await sentenceBox(win, S4, 2)
-      const bx = bar.x + 3, by = bar.y + bar.height / 2 // 底栏左边的留白:点它没有别的副作用
+      const bx = bar.x + 2, by = bar.y + bar.height / 2 // 那一块左边的留白:点它没有别的副作用
       const behind = bx > b4.left && bx < b4.right && Math.abs(b4.y0 - by) < 8
       await win.mouse.click(bx, by); await win.waitForTimeout(700)
       const survived = onP2()
+      await win.evaluate(() => { document.querySelector('.pr-zoomcap').style.transform = '' })
       await win.evaluate((dy) => document.querySelector('.pr-container').scrollBy(0, dy), 160 / kz); await win.waitForTimeout(700)
       b4 = await sentenceBox(win, S4, 2)
       await win.mouse.move(b4.x0 + 30, b4.top - 12); await win.mouse.down(); await win.mouse.move(b4.x0 + 30, b4.top + 26, { steps: 6 }); await win.mouse.up()
