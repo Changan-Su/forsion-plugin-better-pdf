@@ -2,7 +2,7 @@
 
 Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
 
-当前版本 **0.1.3**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
+当前版本 **0.1.4**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
 
 - **批注不改 PDF**。每份 PDF 的批注存在它旁边的隐藏文件 `.<文件名>.pdf.annot.json` 里(坐标是 PDF 自己的坐标,换设备、换缩放都对得上)。
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
@@ -19,7 +19,7 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
 - **装好是空的**:不带示例 PDF,不带演示批注。
 
 **凡是「打开这份 PDF」都归本插件**(2.13.2 之后的桌面版本):文件树、最近使用、笔记里的 `[[x.pdf]]`,带页码的 `[[x.pdf#page=3]]`(「复制引用」贴出来的就是这种,点回去落在那一页),以及聊天里的引用(落在那一页;带引语的会用查找把那句话标出来,查找条开着,关掉即清)。
-仍由内置阅读器处理的只有两样:笔记里的 `![[x.pdf]]` 嵌入,和文件树右键的「用内置阅读器打开」。库外的 PDF(聊天里按绝对路径引用的)插件读不到,也走内置阅读器。
+仍由内置阅读器处理的只有两样:笔记里的 `![[x.pdf]]` 嵌入,和文件树右键的「用内置阅读器打开」。库外的 PDF(聊天里按绝对路径引用的)插件读不到,也走内置阅读器;从系统「用 Forsion 打开」的库外 PDF 例外(桌面 2.13.8 起,见下文「外部 PDF 与宿主动效」)。
 
 **桌面 2.13.2 及更早**:只有从左侧文件树(和最近使用)点开才归本插件;笔记里的 PDF 链接、带页码的链接、聊天引用进的是内置阅读器 —— 那几个版本没有把这些入口交给「默认打开方式」。在这些版本上请从文件树点那份 PDF。
 
@@ -107,13 +107,13 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 - **Quoting is copying.** "Copy quote" puts the text, a link back to the page and your comment on the clipboard.
 - **It ships empty**: no sample PDF, no demo annotations.
 
-On desktop versions newer than 2.13.2, every way of opening a PDF goes to this plugin: the file tree, recent items, `[[x.pdf]]` note links, page links such as `[[x.pdf#page=3]]` (what "Copy citation" produces; clicking one lands on that page) and chat citations (a quoted passage is marked through the find bar). Only `![[x.pdf]]` embeds, the explicit "Open with the built-in reader" entry and PDFs outside the vault stay with the built-in reader. On desktop 2.13.2 and earlier, note links and chat citations still open the built-in reader; open the PDF from the file tree instead.
+On desktop versions newer than 2.13.2, every way of opening a PDF goes to this plugin: the file tree, recent items, `[[x.pdf]]` note links, page links such as `[[x.pdf#page=3]]` (what "Copy citation" produces; clicking one lands on that page) and chat citations (a quoted passage is marked through the find bar). Only `![[x.pdf]]` embeds, the explicit "Open with the built-in reader" entry and PDFs outside the vault stay with the built-in reader (on desktop 2.13.8 and later, a PDF outside the vault opened from the operating system with "Open with Forsion" does come to this plugin; its annotations are saved in a hidden file next to it). On desktop 2.13.2 and earlier, note links and chat citations still open the built-in reader; open the PDF from the file tree instead.
 
 Requires desktop Forsion 2.13.0 or newer. Desktop only.
 
-## 外部 PDF 与宿主动效（功能分支，尚未发布）
+## 外部 PDF 与宿主动效（0.1.4 起，需要桌面 2.13.8 起）
 
-配套桌面宿主支持后，系统「用 Forsion 打开」的库外 PDF 也按默认打开器交给 Better PDF。批注保存到原文件旁的隐藏 `.annot.json`，源文件保持只读；导出经系统另存为保存副本。源目录只读时会报告保存失败。旧宿主继续用原来的库内阅读方式。
+桌面 2.13.8 起（测试版 2.13.8-beta.3 已带），系统「用 Forsion 打开」的库外 PDF 也按默认打开器交给 Better PDF。批注保存到原文件旁的隐藏 `.annot.json`，源文件保持只读；导出经系统另存为保存副本。源目录只读时会报告保存失败。旧宿主继续用原来的库内阅读方式。
 
 批注卡、更多菜单和工具提示优先使用 `ctx.ui.popover` / `contextMenu` / `attachTooltip`；查找、缩略图和首次出现的画笔浮板消费共享 `data-motion`。旧宿主保留原有控件。动效时长、曲线和减少动态效果遵循宿主。
 
