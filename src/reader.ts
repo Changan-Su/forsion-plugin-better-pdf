@@ -548,7 +548,8 @@ export class Reader {
     if (!folded.length || !ctx.ui?.contextMenu) return
     this.closePop()
     this.hostMenu = ctx.ui.contextMenu({ anchor: anchorBtn, align: 'end' },
-      folded.map(([k, ic]) => ({ label: TOOL_KEY[k] ? `${t(`tool.${k}`)} (${TOOL_KEY[k]})` : t(`tool.${k}`), icon: ic, run: () => this.setTool(k) })),
+      folded.map(([k, ic]) => ({ label: TOOL_KEY[k] ? `${t(`tool.${k}`)} (${TOOL_KEY[k]})` : t(`tool.${k}`), icon: ic, run: () => { this.setTool(k); this.container.focus({ preventScroll: true }) } })),
+      // 菜单关掉时焦点跟着按钮一起没了:交回阅读区,快捷键、Esc、撤销才有人听
       { onClose: () => { this.hostMenu = null } })
   }
 
@@ -1303,6 +1304,8 @@ export class Reader {
       side.hidden = false
     } else {
       delete side.dataset.still
+      // 焦点还在卡里(点了目录条目、在卡里按 Esc):交回阅读区,不然卡一藏焦点掉到 body,快捷键没人听;用户已经点到别处就不抢
+      if (side.contains(document.activeElement)) this.container.focus({ preventScroll: true })
       side.setAttribute('data-lcl-exit', '')
       const done = (): void => {
         if (this.sideExit) { clearTimeout(this.sideExit); this.sideExit = null }
@@ -1559,7 +1562,7 @@ export class Reader {
 export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: (hasAnnots: boolean) => void): () => Promise<void> {
   const r = new Reader(host, pdfPath, io)
   let ready = false
-  const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; onReady?.(r.doc.data.annots.length > 0) } })
+  const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; const d = r.doc.data; onReady?.(d.annots.length > 0 || Object.values(d.ink).some((a) => a.length > 0)) } })
   const onOut = (e: FocusEvent): void => r.commitText(e.target as HTMLElement)
   r.root.addEventListener('focusout', onOut)
   const offGoto = onGoto?.((to) => r.goto(to.page, to.quote))
