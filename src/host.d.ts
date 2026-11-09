@@ -84,6 +84,8 @@ declare const ctx: {
     attachTooltip?(el: HTMLElement, content: string, opts?: { side?: 'top' | 'bottom' | 'left' | 'right' }): { dispose(): void }
     contextMenu?(at: { anchor: HTMLElement; align?: 'start' | 'end' }, items: { label: string; icon?: string; run(): void }[], opts?: { onClose?(): void }): () => void
     popover?(anchor: HTMLElement, opts: { side?: 'top' | 'bottom'; label?: string; mount(el: HTMLElement): void | (() => void); onClose?(): void }): { dispose(): void; update(): void }
+    /** 2026-10-26+。工具栏 / 视图头尺寸的分段开关(和视图模式切换同一颗)或下拉。 */
+    mountControl?(el: HTMLElement, control: { type: 'segmented' | 'select'; value: string; options: { value: string; label: string; icon?: string }[]; onChange(value: string): void; label?: string; disabled?: boolean }): { update(patch: { value?: string; options?: { value: string; label: string }[]; disabled?: boolean }): void; dispose(): void }
 
     /** 2.13.0+(modes 2.13.3+,vault 2.13.8+)。宿主的 Amadeus 编辑器,正文归插件存。 */
     mountMarkdownEditor?(el: HTMLElement, opts: { value: string; label?: string; modes?: boolean; vault?: boolean; onChange?(markdown: string): void }): { getValue(): string; focus(): void; dispose(): void }

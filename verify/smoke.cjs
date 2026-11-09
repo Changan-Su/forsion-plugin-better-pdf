@@ -47,6 +47,8 @@ const fillCard = async (win, text) => {
   if (await body.evaluate((n) => n.tagName === 'TEXTAREA')) return body.fill(text)
   await body.click(); await win.keyboard.press('ControlOrMeta+a'); await win.keyboard.type(text)
 }
+/** 目录卡上的「目录 / 缩略图」:宿主有分段控件(ctx.ui.mountControl)时是它的 [role=tab],旧宿主是插件自己的 .pr-sidetab。 */
+const SIDETAB = (v) => `.pr-sidetabs :is(.pr-sidetab[data-v="${v}"], [role="tab"][aria-label="${v === 'toc' ? '目录' : '缩略图'}"])`
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
 
 /** 摆台用的样张:一篇像样的四页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
@@ -185,9 +187,13 @@ async function main() {
     // ① 接管:是我们的阅读器,不是内置的
     check('① 点开 PDF 由插件打开', await win.locator('.pr-root .pdfViewer .page').count() === 3 && await win.locator('.amx-pdfview').count() === 0)
     check('① 刚装好没有任何批注', readSidecar() === null && await win.locator('.pr-marks > *').count() === 0)
+    // 11-09 起没有批注的 PDF 不替用户开右栏;要看点顶上「批注栏」
+    await win.waitForTimeout(1200)
+    check('① 没有批注的 PDF 不自动开右栏', await win.locator('.pr-listhead').count() === 0)
+    await win.locator('.pr-toolbar [data-act="panel"]').click()
     await win.locator('.pr-listhead').waitFor({ state: 'attached', timeout: 8000 }).catch(() => {})
     const tabs = await win.locator('[data-pdfmock], .pr-panel').count()
-    check('① 右栏开出了批注列表', tabs >= 1 && await win.locator('.pr-listhead').count() === 1)
+    check('① 点「批注栏」开出批注列表', tabs >= 1 && await win.locator('.pr-listhead').count() === 1)
     hasInk = await win.locator('.pr-toolbar [data-act="tool"][data-v="ink"]').count() === 1
 
     // ② 选中一句 → 浮条 → 点第一颗颜色 = 高亮
@@ -327,14 +333,23 @@ async function main() {
     await win.screenshot({ path: path.join(SHOTS, '2b-ask.png') })
     // ④c 目录:在左栏(11-03 起)。悬浮目录的刻度:2.13.8 起叫 .lcl-ftoc-tick,2.13.7 叫 .lcl-ftoc-bar,缺省是「目录」那一格;右栏不再自动开「大纲」
     check('④c 右栏不再自动开「大纲」', !(await win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab:has([aria-label="大纲"])').count()))
+    const vw0 = await win.evaluate(() => document.querySelector('.pr-viewport').offsetWidth)
     await win.locator('.pr-toolbar [data-act="side"]').click()
     const nToc = await until(() => win.locator('.pr-toc .pr-tocitem').count().then((c) => c >= 3 && c), 6000)
-    check('④c 左栏缺省是目录:列出这份 PDF 的书签', nToc >= 3 && await win.locator('.pr-sidetab.on').getAttribute('data-v') === 'toc', `条目 ${nToc}`)
+    const tocOn = await win.locator(SIDETAB('toc')).first().evaluate((b) => b.classList.contains('on') || b.getAttribute('aria-selected') === 'true').catch(() => false)
+    check('④c 目录卡缺省是目录:列出这份 PDF 的书签', nToc >= 3 && tocOn, `条目 ${nToc}`)
+    // 11-09 改悬浮:开卡不挤页面;宽度写死区间(原来被最长那条书签撑开);外壳挂宿主 .ui-popover 的进场
+    const card = await win.evaluate(() => { const s = document.querySelector('.pr-side'); return { vw: document.querySelector('.pr-viewport').offsetWidth, w: s.offsetWidth, anim: getComputedStyle(s).animationName, host: !!document.querySelector('.pr-sidetabs.host') } })
+    check('④c 目录卡悬浮:页面区宽度不变,卡宽 232–300', card.vw === vw0 && card.w >= 232 && card.w <= 300, JSON.stringify({ ...card, vw0 }))
+    console.log(`INFO  ④c 目录卡进场动画 ${card.anim},分段控件 ${card.host ? '宿主' : '插件自画'}`)
     await win.locator('.pr-toc .pr-tocitem').nth(1).click(); await win.waitForTimeout(350)
     const flashed = await win.locator('.pr-flash').count(); await win.waitForTimeout(700)
     check('④c 点目录跳到那一页、那一行闪一下,那一条亮着', await win.locator('.pr-pageinput').inputValue() === '2' && flashed === 1 && await win.locator('.pr-tocitem.on').getAttribute('data-v') === '1', `flash ${flashed}`)
     await win.locator('.pr-pageinput').fill('1'); await win.locator('.pr-pageinput').press('Enter'); await win.waitForTimeout(600)
-    await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(400)
+    await win.keyboard.press('Escape')
+    check('④c Esc 收起目录卡(退场完就藏起来)', !!await until(() => win.evaluate(() => document.querySelector('.pr-side').hidden), 2000))
+    check('④c 收起后焦点回到阅读区(快捷键还有人听)', await win.evaluate(() => !!document.activeElement?.closest('.pr-root') && !document.activeElement.closest('.pr-side')))
+    await win.waitForTimeout(300)
     const ftoc = await until(() => win.evaluate(() => document.querySelectorAll('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').length || 0), 4000)
     check('④c 左栏收起后页面边上浮出宿主的悬浮目录(一条一个刻度)', ftoc >= 3, `刻度 ${ftoc}`)
     await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
@@ -344,12 +359,12 @@ async function main() {
     const found = await until(() => win.locator('.pr-findcount').innerText().then((t) => /1 \/ 1/.test(t) && t), 6000)
     check('④d 查找:数出命中并跳到那一页', !!found && await win.locator('.pr-pageinput').inputValue() === '2', String(found))
     await win.locator('.pr-findbar [data-act="find-close"]').click()
-    await win.locator('.pr-toolbar [data-act="side"]').click(); await win.locator('.pr-sidetab[data-v="thumbs"]').click()
+    await win.locator('.pr-toolbar [data-act="side"]').click(); await win.locator(SIDETAB('thumbs')).first().click()
     check('④c 左栏开着时没有悬浮目录', !(await win.locator('.pr-viewport :is(.lcl-ftoc-tick, .lcl-ftoc-bar)').count()))
     const thumbs = await until(() => win.evaluate(() => { const c = [...document.querySelectorAll('.pr-thumb canvas')]; return c.length === 3 && c[0].width > 100 && c.length }), 6000)
     check('④d 缩略图栏画出三页', thumbs === 3)
     await win.locator('.pr-thumb').first().click(); await win.waitForTimeout(500)
-    await win.locator('.pr-sidetab[data-v="toc"]').click(); await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(800)
+    await win.locator(SIDETAB('toc')).first().click(); await win.locator('.pr-toolbar [data-act="side"]').click(); await win.waitForTimeout(800)
 
     // ④e 浮在页面上的几块(方案 A):宽处工具岛在顶上居中、几块互不压;窄处(< 660px)工具岛停到底下,翻页挪到顶上,缩放收起
     await win.locator('.pr-toolbar [data-v="highlight"]').click(); await win.waitForTimeout(400)
@@ -369,6 +384,21 @@ async function main() {
     const dock = await isles()
     check('④e 窄处:工具岛停到底下居中,色点那排在它上面,翻页挪到顶上,缩放收起,互不压', dock.w === 'dock' && dock.centred && dock.toolsBottom < 20 && !dock.overlaps.length && dock.inside && !(await win.locator('.pr-zoomcap').isVisible()), JSON.stringify(dock))
     await win.screenshot({ path: path.join(SHOTS, '4e-dock.png') })
+    // 很窄(< 400,用户把 PDF 开在窄分栏里):页码只留数字、工具岛收几件进「⋯」,不再互相盖住、不被裁
+    await win.evaluate(() => { document.querySelector('.pr-root').style.width = '360px' }); await win.waitForTimeout(600)
+    const xsIsles = await isles()
+    const fold = await win.evaluate(() => ({ xs: 'xs' in document.querySelector('.pr-root').dataset, more: !!document.querySelector('.pr-tools [data-act="tools-more"]'), note: !!document.querySelector('.pr-tools [data-v="note"]'),
+      hl: !!document.querySelector('.pr-tools [data-v="highlight"]'), arrows: [...document.querySelectorAll('.pr-pagecap .pr-btn')].some((b) => b.offsetWidth > 0) }))
+    check('④e 很窄:便签 / 文字 / 形状 / 橡皮收进「⋯」、页码只留数字、几块互不压且都在阅读区里', fold.xs && fold.more && !fold.note && fold.hl && !fold.arrows && !xsIsles.overlaps.length && xsIsles.inside, JSON.stringify({ ...fold, overlaps: xsIsles.overlaps, inside: xsIsles.inside }))
+    await win.locator('.pr-tools [data-act="tools-more"]').click()
+    const foldMenu = await until(() => win.locator('.ctx-menu').first().innerText().catch(() => ''), 3000)
+    check('④e 「⋯」里列出收起的工具', /便签/.test(foldMenu || '') && (!hasInk || /橡皮/.test(foldMenu || '')), String(foldMenu).replace(/\s+/g, ' ').slice(0, 80))
+    await win.screenshot({ path: path.join(SHOTS, '4e-xs.png') })
+    await win.locator('.ctx-menu').first().getByText('便签').first().click(); await win.waitForTimeout(300)
+    const picked = await win.evaluate(() => ({ on: !!document.querySelector('.pr-tools [data-v="note"].on'), focus: !!document.activeElement?.closest('.pr-root') }))
+    await win.keyboard.press('v'); await win.waitForTimeout(200)
+    const back = await win.evaluate(() => !!document.querySelector('.pr-tools [data-v="select"].on'))
+    check('④e 从「⋯」选了便签:它露回岛上,焦点在阅读区,按 V 回到选择', picked.on && picked.focus && back, JSON.stringify({ ...picked, back }))
     await win.evaluate(() => { document.querySelector('.pr-root').style.width = '' }); await win.waitForTimeout(600)
     await win.locator('.pr-toolbar [data-v="select"]').click(); await win.waitForTimeout(300)
     const ind = await win.evaluate(() => { const i = document.querySelector('.pr-ind').getBoundingClientRect(), b = document.querySelector('.pr-tools [data-v="select"]').getBoundingClientRect(); return Math.abs(i.left - b.left) + Math.abs(i.width - b.width) })
