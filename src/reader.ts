@@ -20,6 +20,8 @@ const TOOLS: [Tool, string][] = [
 const BOARD_TOOLS: Tool[] = ['shape', 'ink', 'eraser']
 /** 用得上「颜色」的工具:只有拿着它们时工具栏才出色点(选择、抓手、橡皮下点了色点什么都不变)。 */
 const COLOR_TOOLS: Tool[] = ['highlight', 'underline', 'note', 'text']
+/** 分栏很窄(XS_BELOW)时收进工具岛「⋯」的那几件;手上正拿着的那件照旧露在岛上。 */
+const XS_FOLD: Tool[] = ['note', 'text', 'shape', 'eraser']
 /** 工具的字母键,照宿主白板的来(V 选择、P / X 笔、E 橡皮、R O A L 四种形状、T 文字);高亮、下划线、便签是我们自己的,另取 H U N。
  *  白板层的工具由我们定死,引擎因此不认它自己的快捷键,得我们来接。数字键另算:按工具栏上的顺序,0 也是橡皮。 */
 const KEY_TOOL: Record<string, [Tool, HostBoardShape?]> = {
@@ -102,6 +104,14 @@ let panelOpened = false
 const SIDE_KEY = 'pdf-reader.side-tab'
 let lastSideTab: 'toc' | 'thumbs' = 'toc'
 try { if (localStorage.getItem(SIDE_KEY) === 'thumbs') lastSideTab = 'thumbs' } catch { /* 读不出来就用目录 */ }
+/** 目录卡上次是开着还是收着(11-09):下次打开 PDF 照旧,但不播入场(只给用户刚点的那一下)。 */
+const SIDE_OPEN_KEY = 'pdf-reader.side-open'
+let lastSideOpen = false
+try { lastSideOpen = localStorage.getItem(SIDE_OPEN_KEY) === '1' } catch { /* 读不出来就收着 */ }
+/** 分栏窄于这个宽度(CSS px):点了目录 / 缩略图跳过去后卡片自动收起,免得挡着刚跳到的那页。 */
+const SIDE_AUTOCLOSE_BELOW = 560
+/** 分栏窄于这个宽度:页码只留「1 / 13」,工具岛只留常用五件、其余收进「⋯」。 */
+const XS_BELOW = 400
 /** 一个元素在滚动层里的纵向位置(offsetTop 一路加到 root;不受界面缩放影响)。 */
 const offsetIn = (el: HTMLElement, root: HTMLElement): number => {
   let y = 0
@@ -187,6 +197,10 @@ export class Reader {
   private tocStarted = false
   private tocAt = -1
   private sideTab = lastSideTab
+  /** 宿主的分段控件(ctx.ui.mountControl,2.13.x+);没有就用自己画的两颗按钮。 */
+  private sideSeg: { update(patch: { value?: string }): void; dispose(): void } | null = null
+  private sideExit: ReturnType<typeof setTimeout> | null = null
+  private sideRestored = false
   private ftoc: { refresh(): void; dispose(): void } | null = null
   private pendingGoto: { page: number; quote?: string } | null = null
   /** 容器当前有尺寸、且页面已经按这个尺寸排过(由 ResizeObserver 维护)。 */
@@ -200,7 +214,7 @@ export class Reader {
     // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
     this.root = el(`<div class="pr-root">
       <div class="pr-body">
-        <div class="pr-side" hidden><div class="pr-sidetabs" role="tablist"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
+        <div class="pr-side ui-popover" hidden><div class="pr-sidetabs"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
           <div class="pr-container" tabindex="-1"><div class="pdfViewer"></div><div class="pr-anchors"></div></div>
           <div class="pr-board"></div>
@@ -295,6 +309,7 @@ export class Reader {
       this.viewer.findController.setDocument(pdf)
       this.setState('ready')
       this.renderBottombar()
+      if (this.sideOpen()) this.renderSide() // 文档到之前就恢复开着的卡:缩略图要等文档
       this.ink?.onDocReady()
       this.emit()
     } catch (e) {
@@ -375,7 +390,13 @@ export class Reader {
       this.hideBar() // 切走标签页、拖分栏:条不跟着这个视图藏起来 / 挪走
       this.sized = container.clientHeight > 0
       // 窄处(对话旁那一格、分栏)工具岛挪到底下停靠,翻页挪到顶上居中,缩放收起(⌘ + 滚轮照样能缩)。
-      if (container.clientWidth > 0) { if (container.clientWidth < 660) this.root.dataset.w = 'dock'; else delete this.root.dataset.w }
+      if (container.clientWidth > 0) {
+        if (container.clientWidth < 660) this.root.dataset.w = 'dock'; else delete this.root.dataset.w
+        const xs = container.clientWidth < XS_BELOW
+        if (xs !== ('xs' in this.root.dataset)) { if (xs) this.root.dataset.xs = ''; else delete this.root.dataset.xs; this.renderToolbar() }
+        // 上次开着目录卡:分栏够宽才照旧打开(窄处一开就挡住半页),不播入场
+        if (!this.sideRestored) { this.sideRestored = true; if (lastSideOpen && container.clientWidth >= SIDE_AUTOCLOSE_BELOW) this.setSide(true, false) }
+      }
       if (this.sized) this.slideInd()
       if (this.dead || !this.pdf) return
       const cur = viewer.currentScaleValue
@@ -402,6 +423,7 @@ export class Reader {
     if (ev.key !== 'Escape') return
     if (this.pop) this.closePop()
     else if (!this.q('.pr-findbar').hidden) this.toggleFind(false)
+    else if (this.sideOpen()) this.setSide(false)
     else if (this.tool !== 'select') this.setTool('select')
     else if (this.sel.size) this.select(null)
     else return
@@ -425,9 +447,9 @@ export class Reader {
       case 'retry': this.loading = this.load(); break
       case 'tool': this.setTool(v as Tool); break
       case 'color': this.pickColor(v, b); break
-      case 'side': this.toggleSide(); break
+      case 'side': this.setSide(!this.sideOpen()); break
       case 'side-tab': this.setSideTab(v as 'toc' | 'thumbs'); break
-      case 'toc': this.gotoToc(Number(v)); break
+      case 'toc': this.gotoToc(Number(v)); this.autoCloseSide(); break
       case 'find': this.toggleFind(this.q('.pr-findbar').hidden); break
       case 'find-prev': this.find(true, true); break
       case 'find-next': this.find(true, false); break
@@ -438,7 +460,8 @@ export class Reader {
       case 'zoom-out': this.viewer.decreaseScale(); break
       case 'prev': this.viewer.currentPageNumber = Math.max(1, this.page - 1); break
       case 'next': this.viewer.currentPageNumber = Math.min(this.pageCount, this.page + 1); break
-      case 'thumb': this.viewer.currentPageNumber = Number(v); break
+      case 'thumb': this.viewer.currentPageNumber = Number(v); this.autoCloseSide(); break
+      case 'tools-more': this.openToolsMore(b); break
       case 'penmode': setPenMode(!penMode); break
       case 'pen': this.ink?.setPen(v); this.renderToolbar(); break
       case 'shape': this.ink?.setShape(v); this.renderToolbar(); break
@@ -460,11 +483,12 @@ export class Reader {
     // 工具岛:抓手 | 选择 | 划线、便签、文字 | 形状、手写、橡皮,一组一道隔线;按钮角上印着它的字母键。
     const group = (k: Tool): number => (k === 'hand' ? 0 : k === 'select' ? 1 : BOARD_TOOLS.includes(k) ? 3 : 2)
     let last = -1
-    const tools = this.tools().map(([k, ic]) => {
+    const folded = this.foldedTools()
+    const tools = this.tools().filter(([k]) => !folded.some(([f]) => f === k)).map(([k, ic]) => {
       const g = group(k), cut = last >= 0 && g !== last ? sep : ''
       last = g
       return cut + btn('tool', ic, t(`tool.${k}`), this.tool === k || (k === 'hand' && this.spaceHeld), k).replace('</button>', TOOL_KEY[k] ? `<i class="pr-key">${TOOL_KEY[k]}</i></button>` : '</button>')
-    }).join('')
+    }).join('') + (folded.length ? sep + btn('tools-more', 'ellipsis', t('tool.moreTools')) : '')
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
     // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
     // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
@@ -475,7 +499,7 @@ export class Reader {
     const bar = this.q('.pr-toolbar'), f = document.activeElement as HTMLElement | null, had = !!f && bar.contains(f)
     // 「下一笔」的那一排(色点,或手写 / 形状的笔、颜色、粗细、撤销)浮在工具岛下面(pr-palette),不挤工具岛:换工具时岛不变宽、页面不跳。
     bar.innerHTML =
-      `<span class="pr-group pr-isle pr-sidecap">${btn('side', 'panel-left', t('tool.side'), !this.q('.pr-side').hidden)}</span>` +
+      `<span class="pr-group pr-isle pr-sidecap">${btn('side', 'panel-left', t(this.sideOpen() ? 'tool.sideClose' : 'tool.side'), this.sideOpen())}</span>` +
       `<span class="pr-group pr-isle pr-tools"><span class="pr-ind"></span>${tools}</span>` +
       `<span class="pr-group pr-isle pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>` +
@@ -511,6 +535,22 @@ export class Reader {
   }
 
   private tools(): [Tool, string][] { return TOOLS.filter(([k]) => this.ink || !BOARD_TOOLS.includes(k)) }
+
+  /** 分栏很窄时收进「⋯」的工具。只在宿主能把菜单锚在按钮上时才收(旧宿主上照旧全摆出来)。 */
+  private foldedTools(): [Tool, string][] {
+    if (!('xs' in this.root.dataset) || !ctx.ui?.contextMenu || !ctx.ui.popover) return []
+    return this.tools().filter(([k]) => XS_FOLD.includes(k) && k !== this.tool)
+  }
+
+  private openToolsMore(anchorBtn: HTMLElement): void {
+    if (this.hostMenu) { this.closePop(); return }
+    const folded = this.foldedTools()
+    if (!folded.length || !ctx.ui?.contextMenu) return
+    this.closePop()
+    this.hostMenu = ctx.ui.contextMenu({ anchor: anchorBtn, align: 'end' },
+      folded.map(([k, ic]) => ({ label: TOOL_KEY[k] ? `${t(`tool.${k}`)} (${TOOL_KEY[k]})` : t(`tool.${k}`), icon: ic, run: () => this.setTool(k) })),
+      { onClose: () => { this.hostMenu = null } })
+  }
 
   /** 空格按下 / 松开。松开时正拖着的那一下照常拖完(pan 自己在抬起时收)。 */
   private setSpace(on: boolean): void {
@@ -1243,13 +1283,49 @@ export class Reader {
   }
 
   // ── 左栏:目录 / 缩略图 ──────────────────────────────────────────────────────────
-  private toggleSide(): void {
+  /** 目录卡开着(收起的退场途中算收着)。 */
+  private sideOpen(): boolean {
     const side = this.q('.pr-side')
-    side.dataset.motion = 'enter'
-    side.hidden = !side.hidden
+    return !side.hidden && !side.hasAttribute('data-lcl-exit')
+  }
+
+  /** 开 / 收目录卡(11-09 改悬浮,不再推开页面)。卡片带宿主 .ui-popover 的类,进退场挂宿主「弹出来的菜单」那张名单
+   *  (进 ui-menu-enter、退 [data-lcl-exit] → ui-menu-exit;减少动态效果时宿主自己改成只淡)—— 插件不写关键帧。
+   *  user = false:恢复上次的状态,不播入场(只给用户刚点的那一下)。 */
+  private setSide(open: boolean, user = true): void {
+    if (open === this.sideOpen()) return
+    const side = this.q('.pr-side')
+    if (user) { lastSideOpen = open; try { localStorage.setItem(SIDE_OPEN_KEY, open ? '1' : '0') } catch { /* 存不上:只记这一程 */ } }
+    if (this.sideExit) { clearTimeout(this.sideExit); this.sideExit = null }
+    if (open) {
+      side.removeAttribute('data-lcl-exit')
+      if (user) delete side.dataset.still; else side.dataset.still = ''
+      side.hidden = false
+    } else {
+      delete side.dataset.still
+      side.setAttribute('data-lcl-exit', '')
+      const done = (): void => {
+        if (this.sideExit) { clearTimeout(this.sideExit); this.sideExit = null }
+        if (!side.hasAttribute('data-lcl-exit')) return // 退场途中又打开了
+        side.removeAttribute('data-lcl-exit'); side.hidden = true
+        this.syncFtoc() // 卡片收干净了,宿主的悬浮目录才接上
+      }
+      // 宿主没有这条退场规则(旧版本)或减少动态效果关掉了动画:没有 animationend,直接收
+      if (getComputedStyle(side).animationName === 'none') done()
+      else {
+        const end = (e: Event): void => { if (e.target === side) { side.removeEventListener('animationend', end); done() } }
+        side.addEventListener('animationend', end)
+        this.sideExit = setTimeout(() => { side.removeEventListener('animationend', end); done() }, 400)
+      }
+    }
     this.renderToolbar()
-    this.renderSide()
+    if (open) this.renderSide()
     this.syncFtoc()
+  }
+
+  /** 窄分栏里点了目录 / 缩略图:跳过去后收起卡片,别挡着刚跳到的那页。 */
+  private autoCloseSide(): void {
+    if (this.container.clientWidth > 0 && this.container.clientWidth < SIDE_AUTOCLOSE_BELOW) this.setSide(false)
   }
 
   private setSideTab(tab: 'toc' | 'thumbs'): void {
@@ -1259,9 +1335,24 @@ export class Reader {
   }
 
   private renderSide(): void {
-    const tab = this.sideTab, b = (v: string, label: string): string =>
-      `<button class="pr-sidetab${tab === v ? ' on' : ''}" role="tab" aria-selected="${tab === v}" data-act="side-tab" data-v="${v}">${esc(label)}</button>`
-    this.q('.pr-sidetabs').innerHTML = b('toc', t('side.toc')) + b('thumbs', t('side.thumbs'))
+    const tab = this.sideTab, tabs = this.q('.pr-sidetabs')
+    // 宿主的分段控件(和视图模式切换同一颗,滑块跟用户选的动效主题);旧宿主上用自己画的两颗按钮
+    if (ctx.ui?.mountControl) {
+      if (this.sideSeg) this.sideSeg.update({ value: tab })
+      else {
+        tabs.textContent = ''; tabs.classList.add('host')
+        this.sideSeg = ctx.ui.mountControl(tabs, {
+          type: 'segmented', value: tab, label: t('tool.side'),
+          options: [{ value: 'toc', label: t('side.toc') }, { value: 'thumbs', label: t('side.thumbs') }],
+          onChange: (v) => { if (v === 'toc' || v === 'thumbs') this.setSideTab(v) },
+        })
+      }
+    } else {
+      const b = (v: string, label: string): string =>
+        `<button class="pr-sidetab${tab === v ? ' on' : ''}" role="tab" aria-selected="${tab === v}" data-act="side-tab" data-v="${v}">${esc(label)}</button>`
+      tabs.setAttribute('role', 'tablist')
+      tabs.innerHTML = b('toc', t('side.toc')) + b('thumbs', t('side.thumbs'))
+    }
     this.q('.pr-toc').hidden = tab !== 'toc'
     this.q('.pr-thumbs').hidden = tab !== 'thumbs'
     if (tab === 'toc') this.renderToc()
@@ -1418,6 +1509,7 @@ export class Reader {
     this.renderToolbar()
     this.renderFindbar()
     if (this.pdf) this.renderBottombar()
+    if (this.sideSeg) { this.sideSeg.dispose(); this.sideSeg = null }
     if (!this.q('.pr-side').hidden) this.renderSide()
     if (this.ftoc) { this.ftoc.dispose(); this.ftoc = null; this.syncFtoc() }
     if (this.q('.pr-state').dataset.state !== 'ready') this.setState(this.q('.pr-state').dataset.state as 'loading' | 'error')
@@ -1433,6 +1525,8 @@ export class Reader {
     this.commitText(document.activeElement as HTMLElement | null)
     this.ink?.dispose()
     this.ftoc?.dispose()
+    this.sideSeg?.dispose()
+    if (this.sideExit) clearTimeout(this.sideExit)
     for (const f of this.off) { try { f() } catch { /* 收尾不抛 */ } }
     this.mo.disconnect()
     const saved = this.doc ? release(this.doc, this.io) : this.loading
@@ -1461,10 +1555,11 @@ export class Reader {
 }
 
 /** 文字框的失焦要在捕获阶段听(focusout 冒泡,但我们要在重画之前拿到内容)。 */
-export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: () => void): () => Promise<void> {
+/** onReady(有没有批注):文档和批注都读进来之后调一次。 */
+export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: (hasAnnots: boolean) => void): () => Promise<void> {
   const r = new Reader(host, pdfPath, io)
   let ready = false
-  const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; onReady?.() } })
+  const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; onReady?.(r.doc.data.annots.length > 0) } })
   const onOut = (e: FocusEvent): void => r.commitText(e.target as HTMLElement)
   r.root.addEventListener('focusout', onOut)
   const offGoto = onGoto?.((to) => r.goto(to.page, to.quote))

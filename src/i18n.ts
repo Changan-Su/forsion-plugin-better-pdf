@@ -20,6 +20,8 @@ const M: Record<string, [string, string]> = {
   'tool.find': ['在文档中查找', 'Find in document'],
   'tool.panel': ['批注栏', 'Annotation panel'],
   'tool.more': ['更多', 'More'],
+  'tool.moreTools': ['更多工具', 'More tools'],
+  'tool.sideClose': ['收起目录(Esc)', 'Hide contents (Esc)'],
   'tool.undo': ['撤销', 'Undo'],
   'tool.redo': ['重做', 'Redo'],
   'tool.color': ['颜色', 'Colour'],
