@@ -18,6 +18,8 @@ const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs
 const SHOTS = path.join(HERE, '.shots'); fs.mkdirSync(SHOTS, { recursive: true })
 // 宿主有共用的划线条(ctx.ui.mountSelectionBar)时,选区浮出的是它;没有(2.13.3 及更早)时是插件自己的浮条 .pr-selpop。
 const HOSTBAR = fs.existsSync(path.join(DESK, 'frontend/src/amadeus/plugins/selectionBarSurface.tsx'))
+// 宿主能把菜单锚在按钮上(ctx.ui.contextMenu 对象重载 + ctx.ui.popover,2.13.8 起)时,很窄的分栏才把工具折进「⋯」;旧宿主照旧全摆出来。
+const HOSTPOP = (() => { try { return fs.readFileSync(path.join(DESK, 'frontend/src/amadeus/plugins/partsSurface.tsx'), 'utf8').includes('openPluginPopover') } catch { return false } })()
 const SELPOP = HOSTBAR ? '[data-testid="selection-bar"]' : '.pr-selpop'
 const SELDOT = HOSTBAR ? `${SELPOP} .selbar-dot` : '.pr-selpop .pr-dot'
 /** 假引擎回的「译文」(划线条上的翻译走 /agent/inline,流式)。 */
@@ -389,16 +391,20 @@ async function main() {
     const xsIsles = await isles()
     const fold = await win.evaluate(() => ({ xs: 'xs' in document.querySelector('.pr-root').dataset, more: !!document.querySelector('.pr-tools [data-act="tools-more"]'), note: !!document.querySelector('.pr-tools [data-v="note"]'),
       hl: !!document.querySelector('.pr-tools [data-v="highlight"]'), arrows: [...document.querySelectorAll('.pr-pagecap .pr-btn')].some((b) => b.offsetWidth > 0) }))
-    check('④e 很窄:便签 / 文字 / 形状 / 橡皮收进「⋯」、页码只留数字、几块互不压且都在阅读区里', fold.xs && fold.more && !fold.note && fold.hl && !fold.arrows && !xsIsles.overlaps.length && xsIsles.inside, JSON.stringify({ ...fold, overlaps: xsIsles.overlaps, inside: xsIsles.inside }))
-    await win.locator('.pr-tools [data-act="tools-more"]').click()
-    const foldMenu = await until(() => win.locator('.ctx-menu').first().innerText().catch(() => ''), 3000)
-    check('④e 「⋯」里列出收起的工具', /便签/.test(foldMenu || '') && (!hasInk || /橡皮/.test(foldMenu || '')), String(foldMenu).replace(/\s+/g, ' ').slice(0, 80))
-    await win.screenshot({ path: path.join(SHOTS, '4e-xs.png') })
-    await win.locator('.ctx-menu').first().getByText('便签').first().click(); await win.waitForTimeout(300)
-    const picked = await win.evaluate(() => ({ on: !!document.querySelector('.pr-tools [data-v="note"].on'), focus: !!document.activeElement?.closest('.pr-root') }))
-    await win.keyboard.press('v'); await win.waitForTimeout(200)
-    const back = await win.evaluate(() => !!document.querySelector('.pr-tools [data-v="select"].on'))
-    check('④e 从「⋯」选了便签:它露回岛上,焦点在阅读区,按 V 回到选择', picked.on && picked.focus && back, JSON.stringify({ ...picked, back }))
+    if (!HOSTPOP) {
+      check('④e 很窄(旧宿主不折叠):页码只留数字、几块互不压且都在阅读区里', fold.xs && !fold.more && !fold.arrows && !xsIsles.overlaps.length && xsIsles.inside, JSON.stringify({ ...fold, overlaps: xsIsles.overlaps, inside: xsIsles.inside }))
+    } else {
+      check('④e 很窄:便签 / 文字 / 形状 / 橡皮收进「⋯」、页码只留数字、几块互不压且都在阅读区里', fold.xs && fold.more && !fold.note && fold.hl && !fold.arrows && !xsIsles.overlaps.length && xsIsles.inside, JSON.stringify({ ...fold, overlaps: xsIsles.overlaps, inside: xsIsles.inside }))
+      await win.locator('.pr-tools [data-act="tools-more"]').click()
+      const foldMenu = await until(() => win.locator('.ctx-menu').first().innerText().catch(() => ''), 3000)
+      check('④e 「⋯」里列出收起的工具', /便签/.test(foldMenu || '') && (!hasInk || /橡皮/.test(foldMenu || '')), String(foldMenu).replace(/\s+/g, ' ').slice(0, 80))
+      await win.screenshot({ path: path.join(SHOTS, '4e-xs.png') })
+      await win.locator('.ctx-menu').first().getByText('便签').first().click(); await win.waitForTimeout(300)
+      const picked = await win.evaluate(() => ({ on: !!document.querySelector('.pr-tools [data-v="note"].on'), focus: !!document.activeElement?.closest('.pr-root') }))
+      await win.keyboard.press('v'); await win.waitForTimeout(200)
+      const back = await win.evaluate(() => !!document.querySelector('.pr-tools [data-v="select"].on'))
+      check('④e 从「⋯」选了便签:它露回岛上,焦点在阅读区,按 V 回到选择', picked.on && picked.focus && back, JSON.stringify({ ...picked, back }))
+    }
     await win.evaluate(() => { document.querySelector('.pr-root').style.width = '' }); await win.waitForTimeout(600)
     await win.locator('.pr-toolbar [data-v="select"]').click(); await win.waitForTimeout(300)
     const ind = await win.evaluate(() => { const i = document.querySelector('.pr-ind').getBoundingClientRect(), b = document.querySelector('.pr-tools [data-v="select"]').getBoundingClientRect(); return Math.abs(i.left - b.left) + Math.abs(i.width - b.width) })
