@@ -9,6 +9,7 @@ import { scopedViewerCss } from './pdf'
 import { allReaders, hasRight, mountReader, openPanel } from './reader'
 import { mountAnnots, mountChat, mountOutline } from './panel'
 import { flushAll, flushAllNow } from './store'
+import { flushReadingPositions } from './readingPosition'
 import { t } from './i18n'
 
 function injectCss(): void {
@@ -24,6 +25,7 @@ function injectCss(): void {
 function saveNow(): void {
   for (const r of allReaders()) r.settle()
   flushAllNow()
+  flushReadingPositions()
 }
 /** 窗口退到后面(切走、最小化):接着可能就是退出应用,而宿主退出时不给渲染层收尾的机会 —— 现在就写。 */
 function saveSoon(): void {
