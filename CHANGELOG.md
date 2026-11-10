@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.1.8 — 2026-11-10
+
+- 切回 Space 时，恢复 PDF 的页码、缩放和横纵滚动位置。阅读位置保存在当前设备。通过带页码的笔记链接打开的标签还需要配套的桌面更新。
+- Returning to a Space restores the PDF's page, zoom, and scroll position on both axes. Reading history stays on this device. Tabs opened through page links in notes also require the companion desktop update.
+
 ## 0.1.7 — 2026-11-09
 
 - **目录 / 缩略图改成悬浮卡**:从左上那颗按钮下面弹出来,浮在页面上,不再把页面往右挤。
