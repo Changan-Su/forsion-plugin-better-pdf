@@ -1,7 +1,7 @@
 {
   "name": "forsion-plugin-better-pdf",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Better PDF:Forsion 的 PDF 阅读 / 批注插件(划线 / 批注 / 手写;构建源,产物 main.js 已提交)",
   "type": "module",
   "scripts": {
@@ -9,7 +9,8 @@
     "check": "node check.mjs",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run build && npm run check",
-    "check:external": "node verify/external-motion.cjs"
+    "check:external": "node verify/external-motion.cjs",
+    "check:reading-position": "node verify/reading-position.cjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",

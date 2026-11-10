@@ -2,7 +2,7 @@
 
 Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
 
-当前版本 **0.1.6**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
+当前版本 **0.1.8**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
 
 - **批注不改 PDF**。每份 PDF 的批注存在它旁边的隐藏文件 `.<文件名>.pdf.annot.json` 里(坐标是 PDF 自己的坐标,换设备、换缩放都对得上)。
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
@@ -26,6 +26,9 @@ Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、�
 
 **桌面 2.13.2 及更早**:只有从左侧文件树(和最近使用)点开才归本插件;笔记里的 PDF 链接、带页码的链接、聊天引用进的是内置阅读器 —— 那几个版本没有把这些入口交给「默认打开方式」。在这些版本上请从文件树点那份 PDF。
 
+切回 Space 时会恢复每份 PDF 的页码、缩放和横纵阅读位置。阅读位置只保存在当前设备。通过带页码的笔记链接打开的标签还需要配套的桌面更新。
+When you return to a Space, Better PDF restores each file's page, zoom, and horizontal and vertical reading position. This history stays on the device. Tabs opened through page links in notes also require the companion desktop update.
+
 ## 开发
 
 ```bash
@@ -45,6 +48,8 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 它用真鼠标走一遍:点开 → 选字高亮 → 评论 / 标签 / 换色 → 复制引用 → 问 Tangu → 目录 / 查找 / 缩略图 → 下划线(拖着就看得到)→ 便签 →
 形状 → 点选拖动 / 框选 / 删除 / 撤销 → 缩放后对位 → 手写(翻页、放大后再画、撤销重做、橡皮)→ 橡皮擦划线再撤销 →
 手写笔模式(笔和手指是用调试协议合成的事件)→ 导出 → 关掉重开。截图在 `.shots/`。`UI_ZOOM=1.1` 在界面缩放 110% 下跑同一遍。
+
+阅读位置回归 / Reading position regression: run `npm run check:reading-position` under the Forsion devlock with `GENESIS_DESKTOP` set to a built desktop checkout. It checks Space switches for PDFs opened from the file tree and page links.
 
 ## 源码
 

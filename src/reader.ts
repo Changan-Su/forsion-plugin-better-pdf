@@ -9,6 +9,7 @@ import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
 import { buildOutline, currentIndex, type Toc } from './outline'
+import { readReadingPosition, readingPositionKey, rememberReadingPosition, type ReadingPosition } from './readingPosition'
 
 export const COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5']
 type Tool = 'hand' | 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
@@ -203,6 +204,9 @@ export class Reader {
   private sideRestored = false
   private ftoc: { refresh(): void; dispose(): void } | null = null
   private pendingGoto: { page: number; quote?: string } | null = null
+  private readonly positionKey: string | null
+  private pendingPosition: ReadingPosition | null
+  private pagesLoaded = false
   /** 容器当前有尺寸、且页面已经按这个尺寸排过(由 ResizeObserver 维护)。 */
   private sized = false
   /** 查找条里现在这句是落点带来的引语(不是用户自己搜的):下一个不带引语的落点到了要把它撤掉。 */
@@ -210,6 +214,8 @@ export class Reader {
   readonly ink: InkLayer | null
 
   constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO) {
+    this.positionKey = readingPositionKey(pdfPath, !!io)
+    this.pendingPosition = readReadingPosition(this.positionKey)
     // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
     // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
     this.root = el(`<div class="pr-root">
@@ -326,7 +332,12 @@ export class Reader {
       target.addEventListener(type, fn, opts)
       this.off.push(() => target.removeEventListener(type, fn, opts))
     }
-    eventBus.on('pagesinit', () => { viewer.currentScaleValue = 'page-width'; this.flushGoto() })
+    const savedScale = this.pendingPosition?.scale
+    eventBus.on('pagesinit', () => { viewer.currentScaleValue = savedScale ?? 'page-width'; this.flushGoto() })
+    eventBus.on('pagesloaded', () => { this.pagesLoaded = true; this.restoreReadingPosition() })
+    for (const type of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
+      on(this.root, type, () => { this.pendingPosition = null }, { capture: true, passive: true })
+    }
     eventBus.on('pagerendered', (e: { pageNumber: number }) => {
       this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1)
       // 目录等第一页画出来再算:读字和画页走同一个 worker,先算会把第一屏拖慢。
@@ -334,7 +345,12 @@ export class Reader {
     })
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
     eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport(); this.placeAnchors() })
-    eventBus.on('updateviewarea', (e: any) => this.syncToc(e.location?.pageNumber, e.location?.top))
+    eventBus.on('updateviewarea', ({ location }: { location?: { pageNumber: number; top: number; left: number } }) => {
+      this.syncToc(location?.pageNumber, location?.top)
+      if (!location || !this.positionKey || !this.pagesLoaded || this.pendingPosition || this.dead
+        || !container.clientWidth || !container.clientHeight) return
+      rememberReadingPosition(this.positionKey, { page: location.pageNumber, scale: String(viewer.currentScaleValue), top: location.top, left: location.left })
+    })
     eventBus.on('updatefindmatchescount', (e: any) => this.syncFind(e.matchesCount))
     eventBus.on('updatefindcontrolstate', (e: any) => this.syncFind(e.matchesCount, e.state))
 
@@ -402,7 +418,10 @@ export class Reader {
       const cur = viewer.currentScaleValue
       if (cur === 'page-width' || cur === 'page-fit') viewer.currentScaleValue = cur
       this.ink?.syncViewport()
-      if (this.sized) this.flushGoto() // 在后台收到的落点,回到前台、页面按新尺寸排好之后再跳
+      if (this.sized) {
+        this.flushGoto() // 在后台收到的落点,回到前台、页面按新尺寸排好之后再跳
+        this.restoreReadingPosition()
+      }
     })
     ro.observe(container)
     this.off.push(() => ro.disconnect())
@@ -1196,6 +1215,7 @@ export class Reader {
    *  根本滚不动,pdf.js 随即把页码改回第 1 页。要等上面那个 ResizeObserver 把缩放重算过再跳。
    *  引语走查找:只在文字层上标出来,不写进文件;查找条跟着打开,看得见标的是什么,也关得掉。 */
   goto(page: number, quote?: string): void {
+    this.pendingPosition = null // Explicit links and citations take precedence over reading history.
     if (!this.viewer.pagesCount || !this.sized) { this.pendingGoto = { page, quote }; return }
     this.viewer.currentPageNumber = Math.min(this.pageCount, Math.max(1, Math.trunc(page) || 1))
     const input = this.q<HTMLInputElement>('.pr-findinput'), open = !this.q('.pr-findbar').hidden
@@ -1217,6 +1237,16 @@ export class Reader {
     const g = this.pendingGoto
     this.pendingGoto = null
     if (g) this.goto(g.page, g.quote)
+  }
+
+  private restoreReadingPosition(): void {
+    const saved = this.pendingPosition
+    if (!saved || !this.pagesLoaded || !this.sized || !this.container.clientWidth || this.dead) return
+    this.pendingPosition = null
+    const pageNumber = Math.min(saved.page, this.pageCount)
+    if (pageNumber !== saved.page) this.viewer.currentPageNumber = pageNumber
+    else this.viewer.scrollPageIntoView({ pageNumber, destArray: [null, { name: 'XYZ' }, saved.left, saved.top, null], allowNegativeOffset: true })
+    this.viewer.update()
   }
 
   // ── 查找 ────────────────────────────────────────────────────────────────────────
