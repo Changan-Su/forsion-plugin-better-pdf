@@ -127,3 +127,5 @@ Requires desktop Forsion 2.13.0 or newer. Desktop only.
 批注卡、更多菜单和工具提示优先使用 `ctx.ui.popover` / `contextMenu` / `attachTooltip`；查找、缩略图和首次出现的画笔浮板消费共享 `data-motion`。旧宿主保留原有控件。动效时长、曲线和减少动态效果遵循宿主。
 
 新增回归：先构建配套桌面，再在 devlock 的 e2e 锁下运行 `GENESIS_DESKTOP=<桌面目录> node verify/external-motion.cjs`。覆盖冷启动 / 运行中的系统打开事件、库外批注、立即关闭前的保存、重开、导出、宿主浮层与减少动态效果。`node check.mjs` 另覆盖外部文件多标签共享句柄与最终保存。
+
+跨页选区 / 公式色带 / 临时提问面板回归：`GENESIS_DESKTOP=<built desktop> npm run check:selection`；`UI_ZOOM=1.1` 验证界面缩放。

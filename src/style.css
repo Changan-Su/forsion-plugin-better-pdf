@@ -265,3 +265,8 @@
 .pr-root[data-w="dock"] .pr-palette { top: auto; bottom: 46px; }
 .pr-root[data-w="dock"] .pr-bottombar { top: 12px; bottom: auto; justify-content: center; }
 .pr-root[data-w="dock"] .pr-zoomcap { display: none; }
+
+/* Continuous PDF text selection; the SVG never takes pointer or keyboard input. */
+.pr-root .pr-container[data-pdf-selection] .textLayer ::selection { background: transparent !important; }
+.pr-root .pr-selection { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; user-select: none; z-index: 1; mix-blend-mode: multiply; }
+.pr-root .pr-selection path { fill: Highlight; fill-opacity: 0.3; }

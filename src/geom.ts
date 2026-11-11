@@ -7,18 +7,23 @@ export interface PageQuads { page: number; quads: number[][] }
 
 /** 同一行里的选区碎块并成一条:垂直中心落在对方高度带内算同一行;水平间隙小于行高才并(词间空隙连上,分栏不连)。 */
 export function mergeLineRects(rects: Box[]): Box[] {
-  const lines: { top: number; bottom: number; segs: { left: number; right: number }[] }[] = []
-  for (const r of [...rects].sort((a, b) => a.top - b.top || a.left - b.left)) {
-    const cy = (r.top + r.bottom) / 2
-    let line = lines.find((l) => cy > l.top && cy < l.bottom)
-    if (!line) { line = { top: r.top, bottom: r.bottom, segs: [] }; lines.push(line) }
-    else { line.top = Math.min(line.top, r.top); line.bottom = Math.max(line.bottom, r.bottom) }
-    const h = r.bottom - r.top
-    const seg = line.segs.find((s) => r.left < s.right + h && r.right > s.left - h)
-    if (seg) { seg.left = Math.min(seg.left, r.left); seg.right = Math.max(seg.right, r.right) }
-    else line.segs.push({ left: r.left, right: r.right })
+  const lines: Box[] = []
+  // Tall body glyphs establish rows before small superscripts. Merge transitively so
+  // a bridging glyph cannot leave two overlapping bands with doubled opacity.
+  for (const r of [...rects].sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))) {
+    let band = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+    for (let i = 0; i < lines.length;) {
+      const l = lines[i], h = Math.min(l.bottom - l.top, band.bottom - band.top)
+      const overlap = Math.min(l.bottom, band.bottom) - Math.max(l.top, band.top)
+      const gap = Math.max(l.left - band.right, band.left - l.right)
+      if (overlap > h * 0.2 && gap < Math.max(l.bottom - l.top, band.bottom - band.top) * 0.6) {
+        band = { left: Math.min(l.left, band.left), right: Math.max(l.right, band.right), top: Math.min(l.top, band.top), bottom: Math.max(l.bottom, band.bottom) }
+        lines.splice(i, 1); i = 0
+      } else i++
+    }
+    lines.push(band)
   }
-  return lines.flatMap((l) => l.segs.map((s) => ({ left: s.left, top: l.top, right: s.right, bottom: l.bottom })))
+  return lines.sort((a, b) => a.top - b.top || a.left - b.left)
 }
 
 /** 页的内容盒;这一页还没渲染出来时是 null。 */
@@ -37,12 +42,7 @@ const toPdf = (pv: any, frame: DOMRect, x: number, y: number): [number, number] 
 export function selectionToQuads(viewer: any): PageQuads[] {
   const sel = window.getSelection()
   if (!sel || sel.isCollapsed || !sel.rangeCount) return []
-  const rects: Box[] = []
-  for (let i = 0; i < sel.rangeCount; i++) {
-    for (const r of sel.getRangeAt(i).getClientRects()) {
-      if (r.width >= 1 && r.height >= 1) rects.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom })
-    }
-  }
+  const rects = selectedTextRects(viewer.viewer ?? viewer.container)
   const out: PageQuads[] = []
   for (let p = 0; p < (viewer.pagesCount ?? 0) && rects.length; p++) {
     const pv = viewer.getPageView(p)
@@ -129,4 +129,28 @@ export function hits(e: any, x: number, y: number, tol: number): boolean {
     return a < tol || b < tol || Math.abs(Math.hypot((x - (x0 + x1) / 2) / a, (y - (y0 + y1) / 2) / b) - 1) * Math.min(a, b) <= tol
   }
   return !(x > x0 + tol && x < x1 - tol && y > y0 + tol && y < y1 - tol)
+}
+
+/** Only selected text-node fragments: Range.getClientRects() also returns whole
+ * textLayer/page wrappers when a selection crosses pages (including page y=0). */
+export function selectedTextRects(root: HTMLElement | null | undefined, supplied?: Range): DOMRect[] {
+  const sel = window.getSelection()
+  const range = supplied ?? (sel?.rangeCount ? sel.getRangeAt(0) : null)
+  if (!root || !range || range.collapsed || !root.contains(range.startContainer) || !root.contains(range.endContainer)) return []
+  const out: DOMRect[] = []
+  const visit = (node: Node): void => {
+    if (!node.textContent || !node.parentElement?.closest('.textLayer') || !range.intersectsNode(node)) return
+    const part = document.createRange()
+    part.selectNodeContents(node)
+    if (node === range.startContainer) part.setStart(node, range.startOffset)
+    if (node === range.endContainer) part.setEnd(node, range.endOffset)
+    if (!part.collapsed) for (const r of part.getClientRects()) if (r.width > 0.2 && r.height > 1) out.push(r)
+  }
+  const scope = range.commonAncestorContainer
+  if (scope.nodeType === Node.TEXT_NODE) visit(scope)
+  else {
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) visit(node)
+  }
+  return out
 }

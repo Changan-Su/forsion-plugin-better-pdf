@@ -50,7 +50,7 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
         // Wait until the Main view and document exist before requesting companions.
         // 11-09:没有批注的 PDF 不替用户开右栏(一整栏「还没有批注」把本来就窄的分栏又让出去一块);要看点顶上「批注栏」。
         if (!opened && hasAnnots && hasRight(el)) { opened = true; openPanel('annots', el) }
-      })
+      }, file.extendView)
       return off
     },
   })
