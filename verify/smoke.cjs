@@ -38,6 +38,7 @@ const fails = []
 const LINKS = process.env.ONLY === 'links'
 // ONLY=parity:只走 ⑯(白板的用法:快捷键、自定义颜色、笔尾橡皮、手指连点两下),自己画自己擦,不靠前面留下的东西。
 const PARITY = process.env.ONLY === 'parity'
+const SELECTION = process.env.ONLY === 'selection'
 // ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇四页的论文样张和一条空笔记),装好本仓的插件就停住,
 // 不跑任何检查 —— 给人或 computer use 照真实工作流上手体验用。Ctrl-C / 杀掉本进程即收场。建议带 UI_ZOOM=1.1。
 const STAGE = process.env.ONLY === 'stage'
@@ -85,7 +86,7 @@ async function makePaper(file) {
 async function makePdf(file) {
   const para = (s) => `<p>${s} Readers mark up documents all the time, and most of those marks are never looked at again. The point of a reading tool is to make the second visit cheap.</p>`
   const html = `<html><body style="font: 15px/1.7 Georgia, serif; margin: 0">
-    <h1>Reading Fixture</h1>${para(S1)}${para(S2)}${para(S3)}
+    <h1>Reading Fixture</h1>${para(S1)}${para(S2)}${para(S3)}${SELECTION ? '<p style="margin-top:130px">Formula start: where the <i>n</i>! and <i>m</i>! factors give <i>x</i><sup>n</sup><i>y</i><sup>m</sup>.</p>' : ''}
     <h1 style="page-break-before: always">Methods</h1>${para(S4)}${para('Each read the same nine-page document.')}
     <h1 style="page-break-before: always">Results</h1>${para('Delayed recall was highest for readers who revisited their notes.')}</body></html>`
   const b = await chromium.launch()
@@ -101,6 +102,7 @@ async function launch(home, vault, backend) {
   // 未打包时 userData 是 `<dir>-dev`,两处都种上,否则会打开本机真实的开发库。
   for (const d of [userData, `${userData}-dev`]) {
     fs.mkdirSync(d, { recursive: true })
+    fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: backend, token: 'fixture' }))
     for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ lastVault: vault, localVault: vault }, null, 2))
   }
   const app = await electron.launch({
@@ -166,6 +168,7 @@ async function main() {
 
   const stub = await startStubEngine({
     handle: async ({ path: route, method, body }) => {
+      if (SELECTION && method === 'GET' && /^\/agent\/sessions\/[^/]+\/detail$/.test(route)) return { session: stub.state.sessions.find(s => s.id === route.split('/')[3]) }
       if (route !== '/agent/inline' || method !== 'POST') return undefined
       const answer = `译文:${String((await body()).selection).slice(0, 12)}`
       return sse([{ type: 'delta', text: answer }, { type: 'done', content: answer, toolCallText: false }])
@@ -181,6 +184,12 @@ async function main() {
     win.on('pageerror', (e) => console.log(`[pageerror] ${e}`)); win.on('console', (m) => { if (m.type() === 'error') console.log(`[console.error] ${m.text()}`) })
     await new Promise((r) => { app.on('close', r); process.on('SIGINT', r); process.on('SIGTERM', r) })
     await app.close().catch(() => {}); await stub.close?.(); return
+  }
+  if (SELECTION) {
+    try { await require('./selection.cjs')({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP }) }
+    finally { await app.close(); await stub.close?.() }
+    check('No page errors', errors.length === 0, errors.join(' | '))
+    process.exit(fails.length ? 1 : 0)
   }
   try {
     // ONLY=links:只走最后的链接几项(⑭ ⑮),改路由 / 落点时用,一分钟内跑完(两段主流程各跳过一次)。

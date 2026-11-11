@@ -265,6 +265,25 @@ await t('选区几何:同一行的碎块并成一条,分栏不连', async () => 
   A.deepEqual(r.map((x) => [x.left, x.right, x.top]), [[0, 90, 0], [300, 340, 0], [0, 50, 20]])
 })
 
+await t('公式选区:正文/斜体/上标并成单行,桥接碎块不重叠,下一行和分栏保持分离', async () => {
+  const { mergeLineRects } = await load('src/geom.ts')
+  // Browser DOMRect coordinates are prototype getters, not enumerable own fields.
+  const domRect = Object.create({ left: 0, right: 20, top: 10, bottom: 30 })
+  A.deepEqual(mergeLineRects([domRect]), [{ left: 0, right: 20, top: 10, bottom: 30 }])
+  const result = mergeLineRects([
+    { left: 0, right: 20, top: 10, bottom: 30 },
+    { left: 25, right: 45, top: 10, bottom: 30 },
+    { left: 18, right: 28, top: 5, bottom: 17 },
+    { left: 100, right: 120, top: 10, bottom: 30 },
+    { left: 0, right: 45, top: 35, bottom: 55 },
+  ])
+  A.deepEqual(result, [
+    { left: 0, right: 45, top: 5, bottom: 30 },
+    { left: 100, right: 120, top: 10, bottom: 30 },
+    { left: 0, right: 45, top: 35, bottom: 55 },
+  ])
+})
+
 await t('外部 PDF:关闭首个标签后,另一个标签仍能保存;最后一条评论在吊销之前落盘', async () => {
   const { files } = fakeHost()
   const S = await load('src/store.ts')

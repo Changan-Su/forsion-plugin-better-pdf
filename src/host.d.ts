@@ -1,3 +1,7 @@
+interface HostExtendView {
+  open(options: { id: string; title: string | (() => string); side?: 'right'; mount(el: HTMLElement): void | (() => void) }): { readonly isOpen: boolean; close(): void }
+  close(): void
+}
 interface HostFileIO { saveCopy?(name: string, bytes: Uint8Array): Promise<string | null>; readBytes(path: string): Promise<Uint8Array | null>; writeBytes(path: string, bytes: Uint8Array): Promise<void> }
 // 宿主注入的 `ctx`(new Function('ctx', code) 的形参)。只声明本插件用到的面;带 ? 的是较新宿主才有的,用前探测。
 // 完整契约见 Forsion-Genesis/desktop/frontend/src/amadeus/plugins/types.ts。
@@ -40,7 +44,7 @@ interface HostBoardHandle {
 interface HostSelectionBarSelection { text: string; markdown?: string }
 interface HostSelectionBarTool { id: string; title: string; icon?: string; color?: string; on?: boolean; run(sel: HostSelectionBarSelection): void }
 interface HostSelectionBarHandle {
-  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number } }): void
+  show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number }; getRect?: () => { left: number; right: number; top: number; bottom: number } | null }): void
   hide(): void
   update(opts: { tools?: HostSelectionBarTool[] }): void
   dispose(): void
@@ -66,7 +70,7 @@ declare const ctx: {
   registerFileType(def: {
     id: string; extensions: string[]; icon?: string; title?: string; override?: boolean; external?: boolean
     /** onGoto:带页码的链接、聊天引用点过来的落点(2.13.2 之后的桌面版本才有;没有它的宿主上这类链接归内置阅读器)。 */
-    mount(el: HTMLElement, file: { filePath: string; io?: HostFileIO; onGoto?: OnGoto }): (() => void | Promise<void>) | void
+    mount(el: HTMLElement, file: { filePath: string; io?: HostFileIO; onGoto?: OnGoto; extendView?: HostExtendView }): (() => void | Promise<void>) | void
   }): boolean | void
   registerView(view: { id: string; title: string; icon?: string; mount(el: HTMLElement): (() => void) | void }): void
   openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' | 'bottom' }): void

@@ -2,7 +2,8 @@
 // 批注列表、大纲、对话在宿主的右栏里(panel.ts),经 getActive()/subscribe 跟着「最近操作过的那份 PDF」走。
 import { EventBus, PDFFindController, PDFLinkService, PDFViewer, ensureWorker, pdfjsLib } from './pdf'
 import { acquire, release, baseOf, dirOf, type Annot, type AnnotDoc, type AnnotType } from './store'
-import { pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
+import { paintSelection, selectionAnchor } from './selection'
+import { selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
 import { icon } from './icons'
 import { t } from './i18n'
 import { tooltips } from './tooltips'
@@ -211,9 +212,11 @@ export class Reader {
   private sized = false
   /** 查找条里现在这句是落点带来的引语(不是用户自己搜的):下一个不带引语的落点到了要把它撤掉。 */
   private quoteFind = false
+  private selectionFrame = 0
+  private askSession: { panel: { readonly isOpen: boolean }; enqueue(text: string): void; options: Parameters<HostExtendView['open']>[0] } | null = null
   readonly ink: InkLayer | null
 
-  constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO) {
+  constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO, private readonly extension?: HostExtendView) {
     this.positionKey = readingPositionKey(pdfPath, !!io)
     this.pendingPosition = readReadingPosition(this.positionKey)
     // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
@@ -259,7 +262,7 @@ export class Reader {
     this.bar = ctx.ui?.mountSelectionBar?.(this.root, {
       view: 'pdf',
       watch: false,
-      ask: (s) => this.ask(s.text, this.page),
+      ask: (s) => this.ask(s.text, (selectionToQuads(this.viewer)[0]?.page ?? this.page - 1) + 1),
       source: () => ({ title: baseOf(this.pdfPath), path: this.pdfPath, page: this.page }),
     }) ?? null
     if (this.bar) this.off.push(() => this.bar!.dispose())
@@ -343,6 +346,7 @@ export class Reader {
       // 目录等第一页画出来再算:读字和画页走同一个 worker,先算会把第一屏拖慢。
       if (!this.tocStarted) { this.tocStarted = true; setTimeout(() => this.loadToc(), 0) }
     })
+    eventBus.on('textlayerrendered', () => this.refreshSelection())
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
     eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport(); this.placeAnchors() })
     eventBus.on('updateviewarea', ({ location }: { location?: { pageNumber: number; top: number; left: number } }) => {
@@ -357,7 +361,7 @@ export class Reader {
     // ⌘/Ctrl + 滚轮、触控板捏合(= 带 ctrlKey 的滚轮)缩放,以光标为中心。pdf.js 的组件包不带这一手。
     on(container, 'wheel', (ev: WheelEvent) => this.onWheel(ev), { passive: false })
     // 划线条是按当时的位置摆在视口上的:页面一滚就不在选区旁边了。
-    on(container, 'scroll', () => { this.ink?.onScroll(); this.closePop() }, { passive: true })
+    on(container, 'scroll', () => { this.ink?.onScroll(); this.closePop(); this.refreshSelection() }, { passive: true })
     on(container, 'pointerdown', (ev: PointerEvent) => { this.downInPage = ev.pointerId; this.onDown(ev) })
     on(container, 'pointerup', (ev: PointerEvent) => {
       const fromPage = !this.bar || this.downInPage === ev.pointerId
@@ -587,6 +591,7 @@ export class Reader {
     if (this.tool === tool && tool !== 'select') tool = 'select' // 再点一次当前工具 = 回到选择
     if (tool === 'eraser' && this.tool !== 'eraser') this.beforeEraser = this.tool
     this.tool = tool
+    this.refreshSelection()
     this.root.dataset.tool = tool
     this.pendingPick = null
     this.closePop()
@@ -919,9 +924,9 @@ export class Reader {
     if (!inside) { if (this.pop?.dataset.kind === 'sel') this.closePop(); this.hideBar(); return }
     if (this.tool === 'highlight' || this.tool === 'underline') { this.markSelection(this.tool); return }
     if (this.tool !== 'select') return
-    const rects = [...sel!.getRangeAt(0).getClientRects()].filter((r) => r.width > 1 && r.height > 1)
+    const rects = selectedTextRects(this.container)
     if (!rects.length) return
-    if (this.bar) { this.showBar(rects); return }
+    if (this.bar) { this.showBar(); return }
     // 没有共用划线条的宿主(2.13.3 及更早):自己画浮条。
     const dots = this.dotsHtml(null, 'color')
     const b = (act: string, ic: string, tip: string, txt = ''): string => `<button class="pr-pbtn${txt ? ' txt' : ''}" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}${esc(txt)}</button>`
@@ -937,8 +942,8 @@ export class Reader {
       else if (act === 'cite') { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text }); this.closePop() }
       else if (act === 'ask') { this.ask(text, this.page); this.closePop() }
     })
-    const top = rects.reduce((m, r) => Math.min(m, r.top), Infinity), left = rects.reduce((m, r) => Math.min(m, r.left), Infinity)
-    this.showPop(pop, { left, top, bottom: rects.reduce((m, r) => Math.max(m, r.bottom), -Infinity) }, 'above')
+    const anchor = selectionAnchor(this.container, sel!.getRangeAt(0))
+    if (anchor) this.showPop(pop, anchor, 'above')
   }
 
   /** 划线条上本视图的工具,和自己画的浮条是同一套:颜色点(含最近挑过的、取色器)、下划线、删除线、写批注、复制、复制引用。 */
@@ -965,21 +970,36 @@ export class Reader {
     i.click() // 按条上那一下是 mousedown,算用户手势,取色器开得出来
   }
 
-  private showBar(rects: DOMRect[]): void {
-    const rect = { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) }
-    this.bar!.update({ tools: this.barTools() }) // 最近挑过的颜色、界面语言随时会变:每次出条现算
-    this.bar!.show({ text: this.selText(), rect })
+  private showBar(): void {
+    const range = window.getSelection()?.rangeCount ? window.getSelection()!.getRangeAt(0).cloneRange() : null
+    if (!range) return
+    // Keep node endpoints, not a live Range: detaching a background tab collapses
+    // browser ranges. A translation card must find its text again when it returns.
+    const sc = range.startContainer, so = range.startOffset, ec = range.endContainer, eo = range.endOffset
+    const getRect = () => {
+      if (!this.container.contains(sc) || !this.container.contains(ec)) return null
+      const current = document.createRange()
+      try { current.setStart(sc, so); current.setEnd(ec, eo) } catch { return null }
+      return selectionAnchor(this.container, current)
+    }
+    const rect = getRect()
+    if (!rect) { this.hideBar(); return }
+    this.bar!.update({ tools: this.barTools() })
+    this.bar!.show({ text: this.selText(), rect, getRect })
     this.barShown = true
   }
 
-  /** 条出着的时候选区变了(Shift+方向键、点到别处收起了):条跟着换到新的那段,或者收起 —— 免得条上的动作拿到的是旧的那段字。 */
   private syncBar(): void {
-    if (!this.barShown) return
-    const sel = window.getSelection()
-    const rects = sel && !sel.isCollapsed && sel.anchorNode && this.container.contains(sel.anchorNode)
-      ? [...sel.getRangeAt(0).getClientRects()].filter((r) => r.width > 1 && r.height > 1) : []
-    if (rects.length) this.showBar(rects)
-    else this.hideBar()
+    if (this.barShown) this.showBar()
+  }
+
+  /** Coalesce drag/scroll/text-layer updates; native Selection remains authoritative. */
+  private refreshSelection(): void {
+    if (this.selectionFrame || this.dead) return
+    this.selectionFrame = requestAnimationFrame(() => {
+      this.selectionFrame = 0
+      paintSelection(this.container, this.tool === 'select')
+    })
   }
 
   /** 收起划线条(结果卡不跟着收:它点到外面自己会关)。 */
@@ -991,6 +1011,7 @@ export class Reader {
 
   /** 高亮 / 下划线工具下,选区每变一次就把「松手会得到的那几条」画出来(浏览器自己的选区蓝底这时是藏着的)。 */
   private onSelChange(): void {
+    this.refreshSelection()
     this.syncBar()
     if (this.tool !== 'highlight' && this.tool !== 'underline') return
     const sel = window.getSelection()
@@ -1524,17 +1545,48 @@ export class Reader {
   private ask(text: string, page: number): void {
     if (!text) return
     const quoted = `${text}\n\n— ${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
-    if (ctx.tangu?.mountChat && hasRight(this.root)) {
+    if (ctx.tangu?.mountChat && this.extension) {
+      const previous = this.askSession
+      if (previous?.panel.isOpen) {
+        previous.enqueue(quoted)
+        this.extension.open(previous.options) // reveal the same panel without losing its draft
+        return
+      }
+      const pending = [quoted]
+      let handle: HostChatMount | null = null
+      const enqueue = (text: string): void => { pending.push(text); handle?.quote(text) }
+      const options: Parameters<HostExtendView['open']>[0] = {
+        id: 'pdf-ask', title: () => t('view.chat'), side: 'right',
+        mount: (host) => {
+          host.classList.add('pr-chat')
+          let live = true
+          const open = (withFolder: boolean): void => {
+            const h = ctx.tangu!.mountChat!(host, { folder: withFolder ? this.folder || undefined : undefined, title: t('chat.title', { name: baseOf(this.pdfPath) }) })
+            handle = h
+            for (const text of pending) h.quote(text)
+            if (withFolder && this.folder) void h.ready.then((res) => {
+              if (live && handle === h && !res.ok && ctx.app.hostPath && ctx.app.hostPath(this.folder) == null) { h.dispose(); open(false) }
+            })
+          }
+          open(true)
+          return () => { live = false; handle?.dispose(); handle = null }
+        },
+      }
+      // Queue on this exact extension before its asynchronous native mount. Closing
+      // and immediately reopening cannot deliver a quote to the retiring chat.
+      const panel = this.extension.open(options)
+      this.askSession = { panel, enqueue, options }
+    } else if (ctx.tangu?.mountChat && hasRight(this.root)) {
       openPanel('chat', this.root)
       // 对话视图是异步挂上的:等它登记好再递引文。
       const deadline = Date.now() + 4000
       const hand = (): void => {
+        if (this.dead) return
         if (chat.quote && chat.folder === this.folder) chat.quote(quoted)
         else if (Date.now() < deadline) setTimeout(hand, 80)
       }
       hand()
-    } else if (ctx.tangu?.startChat) void ctx.tangu.startChat({ prompt: quoted, send: false, folder: this.folder || undefined })
-    else { void navigator.clipboard?.writeText(quoted); ctx.notify?.(t('ask.copied')) }
+    } else { void navigator.clipboard?.writeText(quoted); ctx.notify?.(t('ask.copied')) }
   }
 
   /** 切语言后重画带文案的部分。 */
@@ -1553,6 +1605,8 @@ export class Reader {
   dispose(): Promise<void> {
     if (this.dead) return Promise.resolve()
     this.dead = true
+    cancelAnimationFrame(this.selectionFrame)
+    this.extension?.close()
     this.closePop()
     // 页面上正打着字的文字框:先收进数据再走。
     this.commitText(document.activeElement as HTMLElement | null)
@@ -1589,8 +1643,8 @@ export class Reader {
 
 /** 文字框的失焦要在捕获阶段听(focusout 冒泡,但我们要在重画之前拿到内容)。 */
 /** onReady(有没有批注):文档和批注都读进来之后调一次。 */
-export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: (hasAnnots: boolean) => void): () => Promise<void> {
-  const r = new Reader(host, pdfPath, io)
+export function mountReader(host: HTMLElement, pdfPath: string, onGoto?: OnGoto, io?: HostFileIO, onReady?: (hasAnnots: boolean) => void, extension?: HostExtendView): () => Promise<void> {
+  const r = new Reader(host, pdfPath, io, extension)
   let ready = false
   const offReady = r.subscribe(() => { if (!ready && r.doc) { ready = true; const d = r.doc.data; onReady?.(d.annots.length > 0 || Object.values(d.ink).some((a) => a.length > 0)) } })
   const onOut = (e: FocusEvent): void => r.commitText(e.target as HTMLElement)
