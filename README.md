@@ -2,7 +2,7 @@
 
 Forsion 的 PDF 阅读 / 批注插件,读文献用:划线、批注、标签、便签、形状、手写。装上之后,点开库里的 PDF 就由它打开。
 
-当前版本 **0.1.8**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
+当前版本 **0.1.9**(更新记录见 [CHANGELOG.md](./CHANGELOG.md)),需要 Forsion 桌面端 2.13.0 或更新的版本;**手写、形状、橡皮需要 2.13.1 之后的桌面版本**,在 2.13.1 及更早的版本上这三个按钮不出现,其余功能照常。
 
 - **批注不改 PDF**。每份 PDF 的批注存在它旁边的隐藏文件 `.<文件名>.pdf.annot.json` 里(坐标是 PDF 自己的坐标,换设备、换缩放都对得上)。
   需要给别人看时用「更多 → 导出带批注的 PDF」另存一份。
@@ -68,10 +68,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 ## 已知的边界
 
 - PDF 被别的程序改写后不会自动重载,关掉重开。
-- 把标签「移到新窗口」后,那个窗口没有右栏:PDF 和所有批注工具照常用,批注列表 / 对话两个面板不出现(左栏的目录、缩略图照常),工具栏上也不放「面板」按钮;
-  在那里点「问 Tangu」按宿主的代码会把这个标签换成对话(点后退回到 PDF),这一条没实测过。要在新窗口里也有面板,得宿主让那种窗口带右栏。
-- 开在对话旁边那一格里时(聊天里点引用、Agent 把 PDF 摆上台)同样没有那三个面板:右栏一开,那一格就被顶掉。批注工具照常用;
-  「问 Tangu」在那里走的也是上一条说的那条没实测过的路。
+- **边读边问需要 Forsion 2.14.2 或更新版本**：「问 Tangu」在原 PDF 旁边打开扩展面板，主窗口和独立窗口都支持；原 PDF 保持可读、可滚动。旧宿主优先使用右栏，无可用面板时复制引文。
 - 聊天引用带的引语用查找去标:模型抄的引语和 PDF 里的字对不上(断行、连字符)时找不到,查找条会写「没有找到」,页面仍停在引用的那一页。
 - 便签 / 文字放下后不能拖动,删掉重放;高亮、下划线跟着文字走,只能选中和删除。能拖、能缩放的是画上去的东西(笔迹、形状)。
 - 选择工具下「这一下归谁」是按指针底下的东西定的:画上去的东西和离字远的空白归白板(点选、拖动、框选),字和紧挨着字的空白归页面(选字)。
@@ -118,7 +115,7 @@ node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 阅读器插件冒�
 
 On desktop versions newer than 2.13.2, every way of opening a PDF goes to this plugin: the file tree, recent items, `[[x.pdf]]` note links, page links such as `[[x.pdf#page=3]]` (what "Copy citation" produces; clicking one lands on that page) and chat citations (a quoted passage is marked through the find bar). Only `![[x.pdf]]` embeds, the explicit "Open with the built-in reader" entry and PDFs outside the vault stay with the built-in reader (on desktop 2.13.8 and later, a PDF outside the vault opened from the operating system with "Open with Forsion" does come to this plugin; its annotations are saved in a hidden file next to it). On desktop 2.13.2 and earlier, note links and chat citations still open the built-in reader; open the PDF from the file tree instead.
 
-Requires desktop Forsion 2.13.0 or newer. Desktop only.
+Requires desktop Forsion 2.13.0 or newer. Desktop only. Side-by-side Ask Tangu requires Forsion 2.14.2 or newer and works in main and detached windows; older hosts use the sidebar when available or copy the quote.
 
 ## 外部 PDF 与宿主动效（0.1.4 起，需要桌面 2.13.8 起）
 
