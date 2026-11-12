@@ -1,5 +1,14 @@
 # 更新日志
 
+## 0.1.9 — 2026-11-12
+
+- 在 Forsion 2.14.2 及更新版本中，「问 Tangu」打开 PDF 旁边的扩展面板，可以边读边问，主窗口与独立窗口都保留原 PDF 和阅读位置。旧宿主优先使用已有右栏，缺少面板接口时复制引文。
+- 跨页选择时，菜单贴近第一条可见的选中文字，不再跳到页面顶部；批注不再误用整页矩形。
+- 公式、斜体与上标的选区合成连续色带，减少重叠色块。翻译卡跟随原选区，切回视图后恢复锚点。
+- On Forsion 2.14.2 and newer, Ask Tangu opens an extension panel beside the PDF so you can read and ask together. Main and detached windows keep the PDF and reading position. Older hosts use the existing sidebar when available, or copy the quote when no panel API is available.
+- Cross-page selection menus stay beside the first visible selected line, and annotations no longer include page-sized wrapper rectangles.
+- Formula, italic, and superscript selections form continuous bands without overlapping color patches. Translation cards keep their selection anchor when returning to the view.
+
 ## 0.1.8 — 2026-11-10
 
 - 切回 Space 时，恢复 PDF 的页码、缩放和横纵滚动位置。阅读位置保存在当前设备。通过带页码的笔记链接打开的标签还需要配套的桌面更新。
