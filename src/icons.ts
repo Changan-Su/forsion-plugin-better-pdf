@@ -1,5 +1,7 @@
 // Lucide 图标的路径数据(ISC 许可),由 lucide-react 的 __iconNode 生成;要加图标就照这个形状补一行。
 const PATHS: Record<string, string> = {
+  "lock": "<rect x=\"3\" y=\"10\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 10V7a5 5 0 0 1 10 0v3\"/>",
+  "unlock": "<rect x=\"3\" y=\"10\" width=\"18\" height=\"11\" rx=\"2\"/><path d=\"M7 10V7a5 5 0 0 1 9-3\"/>",
   "hand": "<path d=\"M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2\"/><path d=\"M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2\"/><path d=\"M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8\"/><path d=\"M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15\"/>",
   "panel-left": "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M9 3v18\"/>",
   "panel-right": "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"/><path d=\"M15 3v18\"/>",

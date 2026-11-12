@@ -1,5 +1,14 @@
 # 更新日志
 
+## Unreleased — 2026-11-12
+
+- 划线条改为高亮/下划线/删除线动作与独立颜色菜单，各工具记住自己的颜色；工具岛只显示当前色入口，批注卡复用色盘。
+- 高亮、下划线、形状单击使用一次，成功后回到此前的选择/抓手；双击或工具菜单保持，触屏长按开菜单。画笔和橡皮保持连续。
+- 新方框默认直角，可选圆角；旧形状不迁移，选中的已有方框可独立改边角。需要配套宿主的split-menu与roundness接口；未发布安装包或插件版本。
+- Markup tools now separate the primary action from their color menu and remember color per tool. The tool island shows the current color entry; annotation cards share the palette.
+- Highlight, underline, and shapes are single-use by default and return to the previous select/hand tool after a successful commit. Double-click or use the tool menu to keep them; touch users can hold for that menu. Pen and eraser remain continuous.
+- New rectangles default to sharp corners, with round corners available. Existing shapes are preserved and selected rectangles can be changed independently. This requires the companion host split-menu and roundness APIs; no release has been published.
+
 ## 0.1.9 — 2026-11-12
 
 - 在 Forsion 2.14.2 及更新版本中，「问 Tangu」打开 PDF 旁边的扩展面板，可以边读边问，主窗口与独立窗口都保留原 PDF 和阅读位置。旧宿主优先使用已有右栏，缺少面板接口时复制引文。

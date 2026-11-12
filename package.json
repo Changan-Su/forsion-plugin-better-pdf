@@ -11,7 +11,8 @@
     "verify": "npm run typecheck && npm run build && npm run check",
     "check:external": "node verify/external-motion.cjs",
     "check:reading-position": "node verify/reading-position.cjs",
-    "check:selection": "ONLY=selection node verify/smoke.cjs"
+    "check:selection": "ONLY=selection node verify/smoke.cjs",
+    "check:interactions": "node verify/interactions.cjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",

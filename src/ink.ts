@@ -12,6 +12,7 @@
 import type { Reader } from './reader'
 import { esc } from './reader'
 import { t } from './i18n'
+import { validNewShape } from './toolSession'
 import { boundsOf, hits } from './geom'
 
 export const inkAvailable = (): boolean => !!(ctx.ui?.mountBoard && ctx.ui?.boardToSvg)
@@ -45,6 +46,8 @@ export class InkLayer {
   private shaping = false
   private pen = 'default'
   private shape: HostBoardShape = 'rectangle'
+  private roundness: 'sharp' | 'round' = 'sharp'
+  private shapeGesture: { pointer: number; ids: Set<string>; ended: boolean; x: number; y: number } | null = null
   /** 每支笔记着用户给它挑的颜色 / 粗细;null = 用这支笔自己的。形状另记一份。 */
   private readonly prefs: Record<string, { color: string | null; width: number | null }> = {}
   private readonly shapePref: { color: string | null; width: number | null } = { color: INK_COLORS[2], width: 1 } // 形状的线宽引擎按两倍算:1 档画出来是 2pt
@@ -66,19 +69,51 @@ export class InkLayer {
   private touched = false
   /** 抬笔就收:不等下面那个 300ms 的攒批(引擎收尾这一笔时再变一次,由攒批补上)。
    *  不看 dirty:画得快时引擎的变化回调还没来得及报(实测一笔画完才报),而能在这块板上抬笔,它手里就不是旧快照。 */
-  private readonly onUp = (): void => { this.dirty = true; this.commit() }
+  private readonly onDown = (ev: PointerEvent): void => {
+    if (!this.shaping || this.role !== 'draw' || !this.handle || ev.button !== 0) return
+    const ids = (this.shape === 'line' || this.shape === 'arrow') && this.shapeGesture ? this.shapeGesture.ids : new Set(this.handle.getScene().elements.map(e => e.id))
+    this.shapeGesture = { pointer: ev.pointerId, ids, ended: false, x: ev.clientX, y: ev.clientY }
+  }
+  private readonly onCancel = (): void => { this.shapeGesture = null }
+  private readonly onUp = (ev: PointerEvent): void => {
+    if (!this.owns(ev.target) && this.shapeGesture?.pointer !== ev.pointerId) return
+    if (this.shapeGesture?.pointer === ev.pointerId) {
+      const linear = this.shape === 'line' || this.shape === 'arrow'
+      this.shapeGesture.ended = !linear || Math.hypot(ev.clientX - this.shapeGesture.x, ev.clientY - this.shapeGesture.y) >= 2
+    }
+    this.dirty = true; this.commit()
+    setTimeout(() => { this.finishShape(); }, 0)
+  }
+  private readonly onFinalize = (ev: Event): void => {
+    if (!this.shapeGesture || !this.shaping || (this.shape !== 'line' && this.shape !== 'arrow')) return
+    if (ev instanceof KeyboardEvent && ev.key !== 'Enter') return
+    this.shapeGesture.ended = true
+    setTimeout(() => this.finishShape(), 0)
+  }
+  private finishShape(): void {
+    const gesture = this.shapeGesture
+    if (!gesture?.ended || !this.handle || !this.shaping) return
+    if (!this.handle.getScene().elements.some(e => validNewShape(e, gesture.ids))) return
+    this.shapeGesture = null
+    this.dirty = true; this.commit()
+    this.r.completeTool('shape')
+  }
   /** 指针最后在哪(客户区)。页面滚完之后指针底下换了东西,要按它重判一次归谁。 */
   private last: [number, number] | null = null
 
   constructor(private readonly r: Reader) {
-    this.board.addEventListener('pointerup', this.onUp, true)
+    this.board.addEventListener('pointerdown', this.onDown, true)
+    this.board.addEventListener('dblclick', this.onFinalize, true)
+    this.board.addEventListener('keydown', this.onFinalize, true)
+    window.addEventListener('pointerup', this.onUp, true)
+    window.addEventListener('pointercancel', this.onCancel, true)
   }
 
   private get pref(): { color: string | null; width: number | null } { return this.shaping ? this.shapePref : (this.prefs[this.pen] ??= { color: null, width: null }) }
   private get board(): HTMLElement { return this.r.root.querySelector('.pr-board') as HTMLElement }
   private hasInk(): boolean { return Object.values(this.r.doc?.data.ink ?? {}).some((l) => l.length) }
-  private style(): Pick<HostBoardOptions, 'pen' | 'strokeColor' | 'strokeWidth'> {
-    return { pen: this.shaping ? 'default' : this.pen, strokeColor: this.pref.color ?? undefined, strokeWidth: this.pref.width ?? undefined }
+  private style(): Pick<HostBoardOptions, 'pen' | 'strokeColor' | 'strokeWidth' | 'roundness'> {
+    return { roundness: this.roundness, pen: this.shaping ? 'default' : this.pen, strokeColor: this.pref.color ?? undefined, strokeWidth: this.pref.width ?? undefined }
   }
 
   // ── 工具栏中段(手写 / 形状 / 橡皮时) ──
@@ -90,7 +125,31 @@ export class InkLayer {
       : PENS.map(([id, ic]) => btn('pen', ic, t(`pen.${id}`), this.pen === id, id)).join('')
     const widths = `<span class="pr-widths" role="group" aria-label="${esc(t('tool.width'))}">${INK_WIDTHS.map((w, i) =>
       `<button class="pr-width${this.pref.width === w ? ' on' : ''}" data-act="ink-width" data-v="${w}" style="--d:${4 + i * 2.5}px" title="${w}" aria-label="${esc(t('tool.width'))} ${w}"></button>`).join('')}</span>`
-    return `<span class="pr-penrow">${row}</span>` + sep + this.r.dotsHtml(this.pref.color, 'ink-color', INK_COLORS) + sep + widths + sep + history
+    const corners = this.shaping ? this.cornersHtml() + sep : ''
+    return `<span class="pr-penrow">${row}</span>` + sep + corners + this.r.dotsHtml(this.pref.color, 'ink-color', INK_COLORS) + sep + widths + sep + history
+  }
+  private pickedRectangles(): any[] { return (this.handle?.getScene().elements ?? []).filter(e => this.picked.has(e.id) && e.type === 'rectangle') }
+  hasSelectedRectangle(): boolean { return this.pickedRectangles().length > 0 }
+  private get shownRoundness(): 'sharp' | 'round' { const selected = this.pickedRectangles()[0]; return selected ? (selected.roundness ? 'round' : 'sharp') : this.roundness }
+  setRoundness(value: 'sharp' | 'round'): void {
+    const roundness = value === 'round' ? 'round' : 'sharp'
+    const ids = new Set(this.pickedRectangles().map(e => e.id))
+    if (ids.size && this.handle) {
+      const after = roundness === 'round' ? { type: 3 } : null
+      const edits = this.pickedRectangles().filter(e => JSON.stringify(e.roundness ?? null) !== JSON.stringify(after)).map(e => ({ id: e.id, before: e.roundness ?? null, after }))
+      this.r.recordCornerEdit(edits)
+      this.applyCorners(edits, 'after')
+    } else this.roundness = roundness
+    this.handle?.update(this.style())
+  }
+  applyCorners(edits: { id: string; before: unknown; after: unknown }[], direction: 'before' | 'after'): void {
+    if (!this.handle || !edits.length) return
+    const byId = new Map(edits.map(edit => [edit.id, edit[direction]]))
+    this.replace(this.handle.getScene().elements.map(element => byId.has(element.id) ? { ...element, roundness: byId.get(element.id), version: (element.version ?? 0) + 1, updated: Date.now() } : element))
+    this.refreshStatic(); this.r.renderToolbar()
+  }
+  cornersHtml(): string {
+    return `<span class="pr-penrow"><button class="pr-btn pr-tool${this.shownRoundness === 'sharp' ? ' on' : ''}" data-act="roundness" data-v="sharp">${esc(t('shape.sharp'))}</button><button class="pr-btn pr-tool${this.shownRoundness === 'round' ? ' on' : ''}" data-act="roundness" data-v="round">${esc(t('shape.round'))}</button></span>`
   }
   setPen(id: string): void { this.pen = id; this.handle?.update(this.style()) }
   setShape(id: string): void { this.shape = id as HostBoardShape; if (this.shaping) { this.tool = this.shape; this.handle?.update({ tool: this.tool }) } }
@@ -138,6 +197,7 @@ export class InkLayer {
   /** 阅读器换了工具。 */
   setTool(tool: string): void {
     const was = this.role
+    if (tool !== 'shape') this.shapeGesture = null
     this.shaping = tool === 'shape'
     this.role = tool === 'ink' || tool === 'shape' || tool === 'eraser' ? 'draw' : tool === 'select' ? 'select' : 'idle'
     this.tool = tool === 'ink' ? 'freedraw' : tool === 'eraser' ? 'eraser' : tool === 'shape' ? this.shape : 'selection'
@@ -174,7 +234,7 @@ export class InkLayer {
     this.held = sigAll(r.doc.data.ink)
     const h = this.handle = ctx.ui!.mountBoard!(this.board, {
       scene: { elements: this.sceneElements() }, viewport: this.viewport(), tool: this.tool, theme: 'light', ...this.style(),
-      onChange: () => { this.dirty = true; if (!this.commitTimer) this.commitTimer = setTimeout(() => this.commit(), 300) }, // 落笔时每一帧都来,攒一下
+      onChange: () => { this.dirty = true; if (!this.commitTimer) this.commitTimer = setTimeout(() => { this.commit(); this.finishShape() }, 300) }, // 落笔时每一帧都来,攒一下
       onWheel: (ev) => {
         if (ev.ctrlKey || ev.metaKey) r.onWheel(ev)
         else r.container.scrollBy(ev.deltaX, ev.deltaY)
@@ -270,6 +330,7 @@ export class InkLayer {
     if (!more) this.picked.clear()
     for (const id of ids) { if (more && ids.length === 1 && this.picked.has(id)) this.picked.delete(id); else this.picked.add(id) }
     this.touched = true
+    this.r.renderToolbar()
   }
   owns(target: EventTarget | null): boolean { return target instanceof Node && this.board.contains(target) }
 
@@ -374,7 +435,12 @@ export class InkLayer {
     this.commit()
     this.handle?.dispose()
     this.handle = null
-    this.board.removeEventListener('pointerup', this.onUp, true)
+    this.board.removeEventListener('pointerdown', this.onDown, true)
+    this.board.removeEventListener('dblclick', this.onFinalize, true)
+    this.board.removeEventListener('keydown', this.onFinalize, true)
+    window.removeEventListener('pointerup', this.onUp, true)
+    window.removeEventListener('pointercancel', this.onCancel, true)
+    this.shapeGesture = null
     for (const s of this.svgs.values()) s.el.remove()
     this.svgs.clear()
   }

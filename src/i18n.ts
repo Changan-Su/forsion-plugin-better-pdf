@@ -1,5 +1,10 @@
 // 界面文案:每条成对给 [中文, English]。渲染时现取语言,切语言后重画即可(见 index.ts 的 subscribeLocale)。
 const M: Record<string, [string, string]> = {
+  'tool.discreteHint': ['单击使用一次，双击保持；长按打开工具菜单', 'Click to use once; double-click to keep; hold for tool menu'],
+  'tool.once': ['使用一次', 'Use once'],
+  'tool.kept': ['保持工具', 'Keep tool'],
+  'shape.sharp': ['直角', 'Sharp corners'],
+  'shape.round': ['圆角', 'Round corners'],
   'view.annots': ['批注', 'Annotations'],
   'view.outline': ['大纲', 'Outline'],
   'view.chat': ['Tangu', 'Tangu'],
