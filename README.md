@@ -128,7 +128,7 @@ Requires desktop Forsion 2.13.0 or newer. Desktop only. Side-by-side Ask Tangu r
 跨页选区 / 公式色带 / 临时提问面板回归：`GENESIS_DESKTOP=<built desktop> npm run check:selection`；`UI_ZOOM=1.1` 验证界面缩放。
 
 
-## 本轮交互修订（未发布） / Interaction revision (unreleased)
+## 0.1.10 交互修订 / Interaction revision 0.1.10
 
 - 高亮、下划线、形状：单击使用一次，成功后返回此前的选择/抓手；双击保持，或点锁按钮菜单选择「保持工具」。触屏长按工具打开同一菜单。Esc返回此前选择/抓手。画笔和橡皮仍连续使用。
 - 划线条主体用该工具上次颜色，箭头打开颜色菜单；颜色按工具记住。方框边角设置仅影响新形状；选择已有方框后可单独修改，加载旧文件不重写边角。
