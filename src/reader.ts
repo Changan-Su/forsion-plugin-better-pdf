@@ -10,10 +10,11 @@ import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
 import { exportAnnotated } from './export'
 import { buildOutline, currentIndex, type Toc } from './outline'
+import { ToolSession, isDiscrete, markColors, type PdfTool, type MarkTool } from './toolSession'
 import { readReadingPosition, readingPositionKey, rememberReadingPosition, type ReadingPosition } from './readingPosition'
 
 export const COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5']
-type Tool = 'hand' | 'select' | 'highlight' | 'underline' | 'note' | 'text' | 'shape' | 'ink' | 'eraser'
+type Tool = PdfTool
 const TOOLS: [Tool, string][] = [
   ['hand', 'hand'], ['select', 'mouse-pointer-2'], ['highlight', 'highlighter'], ['underline', 'underline'], ['note', 'sticky-note'],
   ['text', 'type'], ['shape', 'shapes'], ['ink', 'pen-line'], ['eraser', 'eraser'],
@@ -43,7 +44,7 @@ function remember(c: string): void {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)) } catch { /* 存不上:只记这一程 */ }
 }
 /** 一次手势(按下到抬起,或一次按键)留下的东西:删掉了哪些批注、白板那边变没变。撤销 / 重做按它走。 */
-interface Step { annots: Annot[]; board: boolean; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
+interface Step { annots: Annot[]; board: boolean; corners?: { id: string; before: unknown; after: unknown }[]; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
 export const KIND_ICON: Record<AnnotType | 'ink', string> = {
   highlight: 'highlighter', underline: 'underline', strike: 'strikethrough', note: 'sticky-note', text: 'type', area: 'square-dashed', ink: 'pen-line',
 }
@@ -154,6 +155,11 @@ export class Reader {
   /** 选中的批注(点一条是一条,框选可以是好几条)。 */
   readonly sel = new Set<string>()
   private tool: Tool = 'select'
+  private readonly toolSession = new ToolSession()
+  private toolClick: { tool: Tool; at: number } | null = null
+  private toolHold: ReturnType<typeof setTimeout> | null = null
+  private heldClickUntil = 0
+  private heldTool: Tool | null = null
   private log: Step[] = []
   private redoLog: Step[] = []
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
@@ -172,7 +178,16 @@ export class Reader {
   private lastTap = 0
   /** 笔尾橡皮刚记过一手:引擎不知道这一手,它那边旧的「重做」还留着。账上没得重做时别再去叫引擎重做(会把早先撤销掉的东西翻回来)。 */
   private redoCut = false
-  private color = COLORS[0]
+  private readonly colors = (() => { try { return markColors(JSON.parse(localStorage.getItem('forsion-pdf-reader.tool-colors') ?? 'null')) } catch { return markColors(null) } })()
+  private colorPop: { dispose(): void } | null = null
+  private get color(): string { return this.colors[this.colorTool()] }
+  private set color(value: string) { this.setMarkColor(this.colorTool(), value) }
+  private colorTool(): MarkTool { return COLOR_TOOLS.includes(this.tool) ? this.tool as MarkTool : 'highlight' }
+  private setMarkColor(tool: MarkTool, value: string): void {
+    if (!HEX.test(value)) return
+    this.colors[tool] = value
+    try { localStorage.setItem('forsion-pdf-reader.tool-colors', JSON.stringify(this.colors)) } catch { /* Keep the in-memory preference. */ }
+  }
   private dead = false
   private loading: Promise<void> = Promise.resolve()
   private readonly subs = new Set<() => void>()
@@ -404,6 +419,21 @@ export class Reader {
     on(window, 'pointercancel', (ev: PointerEvent) => this.onPressUp(ev), { capture: true })
     on(document, 'selectionchange', () => this.onSelChange())
     on(this.root, 'click', (ev: MouseEvent) => this.onAct(ev))
+    const clearHold = (): void => { if (this.toolHold) clearTimeout(this.toolHold); this.toolHold = null }
+    on(this.root, 'pointerdown', (ev: PointerEvent) => {
+      clearHold()
+      const button = (ev.target as HTMLElement).closest<HTMLElement>('[data-act="tool"]')
+      const tool = button?.dataset.v as Tool
+      if (ev.pointerType !== 'touch' || !button || !isDiscrete(tool)) return
+      this.toolHold = setTimeout(() => { this.toolHold = null; this.heldClickUntil = performance.now() + 900; this.heldTool = tool; this.openToolMenu(button, tool) }, 500)
+    })
+    on(window, 'pointerup', clearHold); on(window, 'pointercancel', clearHold)
+    on(this.root, 'contextmenu', (ev: MouseEvent) => {
+      const button = (ev.target as HTMLElement).closest<HTMLElement>('[data-act="tool"]')
+      if (!button || !isDiscrete(button.dataset.v as Tool)) return
+      ev.preventDefault(); this.openToolMenu(button, button.dataset.v as Tool)
+    })
+    this.off.push(() => { clearHold(); this.colorPop?.dispose(); this.colorPop = null })
     on(this.root, 'change', (ev: Event) => this.onColor(ev))
 
     const ro = new ResizeObserver(() => {
@@ -447,7 +477,7 @@ export class Reader {
     if (this.pop) this.closePop()
     else if (!this.q('.pr-findbar').hidden) this.toggleFind(false)
     else if (this.sideOpen()) this.setSide(false)
-    else if (this.tool !== 'select') this.setTool('select')
+    else if (this.tool !== this.toolSession.navigation || this.toolSession.locked) this.setTool(this.toolSession.escape())
     else if (this.sel.size) this.select(null)
     else return
     ev.stopPropagation()
@@ -468,7 +498,10 @@ export class Reader {
     const v = b.dataset.v ?? ''
     switch (b.dataset.act) {
       case 'retry': this.loading = this.load(); break
-      case 'tool': this.setTool(v as Tool); break
+      case 'tool': this.activateTool(v as Tool, ev); break
+      case 'tool-menu': this.openToolMenu(b, this.tool); break
+      case 'tool-color': this.openColors(b, this.color, c => { this.color = c; this.renderToolbar() }); break
+      case 'roundness': this.ink?.setRoundness(v as 'sharp' | 'round'); this.renderToolbar(); break
       case 'color': this.pickColor(v, b); break
       case 'side': this.setSide(!this.sideOpen()); break
       case 'side-tab': this.setSideTab(v as 'toc' | 'thumbs'); break
@@ -500,7 +533,7 @@ export class Reader {
     // 提示上带快捷键(工具、形状才有);读屏念名字,键另写在 aria-keyshortcuts 上。
     const btn = (act: string, ic: string, title: string, on = false, v = ''): string => {
       const key = act === 'tool' || act === 'shape' ? TOOL_KEY[v] : ''
-      return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
+      return `<button class="pr-btn pr-tool${on ? ' on' : ''}" data-act="${act}" data-v="${v}" title="${esc(title)}${key ? ` (${key})` : ''}${act === 'tool' && isDiscrete(v as Tool) ? ` · ${esc(t('tool.discreteHint'))}` : ''}" aria-label="${esc(title)}"${key ? ` aria-keyshortcuts="${key}"` : ''}${on ? ' aria-pressed="true"' : ''}>${icon(ic)}</button>`
     }
     const sep = '<span class="pr-sep"></span>'
     // 工具岛:抓手 | 选择 | 划线、便签、文字 | 形状、手写、橡皮,一组一道隔线;按钮角上印着它的字母键。
@@ -515,7 +548,8 @@ export class Reader {
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
     // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
     // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
-    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? this.dotsHtml(this.color, 'color') : ''
+    const mid = this.tool === 'select' && this.ink?.hasSelectedRectangle() ? this.ink.cornersHtml() : inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? `<button class="pr-color-trigger" data-act="tool-color" title="${esc(t('tool.color'))}" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${this.color}"></span>${icon('chevron-down', 12)}</button>` : ''
+    const mode = isDiscrete(this.tool) && ctx.ui?.contextMenu && ctx.ui.popover ? btn('tool-menu', this.toolSession.locked ? 'lock' : 'unlock', t(this.toolSession.locked ? 'tool.kept' : 'tool.once'), this.toolSession.locked) : '<span class="pr-mode-placeholder" aria-hidden="true"></span>'
     // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
     const hadPalette = !!this.q('.pr-palette')
@@ -523,7 +557,7 @@ export class Reader {
     // 「下一笔」的那一排(色点,或手写 / 形状的笔、颜色、粗细、撤销)浮在工具岛下面(pr-palette),不挤工具岛:换工具时岛不变宽、页面不跳。
     bar.innerHTML =
       `<span class="pr-group pr-isle pr-sidecap">${btn('side', 'panel-left', t(this.sideOpen() ? 'tool.sideClose' : 'tool.side'), this.sideOpen())}</span>` +
-      `<span class="pr-group pr-isle pr-tools"><span class="pr-ind"></span>${tools}</span>` +
+      `<span class="pr-group pr-isle pr-tools"><span class="pr-ind"></span>${tools}${mode}</span>` +
       `<span class="pr-group pr-isle pr-right">${btn('find', 'search', t('tool.find'), !this.q('.pr-findbar').hidden)}` +
       `${penSeen ? btn('penmode', 'pen', t('tool.penMode'), penMode) : ''}${hasRight(this.root) ? btn('panel', 'panel-right', t('tool.panel')) : ''}${btn('more', 'ellipsis', t('tool.more'))}</span>` +
       (mid ? `<span class="pr-group pr-isle pr-palette">${mid}</span>` : '')
@@ -587,8 +621,8 @@ export class Reader {
   /** 橡皮和上一个工具来回换(E 键、手写笔模式下手指连点两下):白板的规矩。 */
   private toggleEraser(): void { this.setTool(this.tool === 'eraser' ? this.beforeEraser : 'eraser') }
 
-  private setTool(tool: Tool): void {
-    if (this.tool === tool && tool !== 'select') tool = 'select' // 再点一次当前工具 = 回到选择
+  private setTool(tool: Tool, locked = false): void {
+    this.toolSession.activate(tool, locked)
     if (tool === 'eraser' && this.tool !== 'eraser') this.beforeEraser = this.tool
     this.tool = tool
     this.refreshSelection()
@@ -600,6 +634,59 @@ export class Reader {
     if (tool !== 'select') this.select(null)
     this.ink?.setTool(tool)
     this.renderToolbar()
+  }
+
+  private activateTool(tool: Tool, ev: MouseEvent): void {
+    if (performance.now() < this.heldClickUntil && tool === this.heldTool) { this.heldTool = null; return }
+    this.heldTool = null
+    const double = !!this.toolClick && this.toolClick.tool === tool && ev.timeStamp - this.toolClick.at < 400
+    this.toolClick = double ? null : { tool, at: ev.timeStamp }
+    this.setTool(tool, isDiscrete(tool) && double)
+  }
+  /** Called by successful markup/shape commits only; navigation and continuous drawing never auto-complete. */
+  completeTool(tool: Tool): void {
+    const next = this.toolSession.complete(tool)
+    if (next) { this.toolClick = null; this.setTool(next) }
+  }
+  private openToolMenu(anchor: HTMLElement, tool: Tool): void {
+    if (!isDiscrete(tool) || !ctx.ui?.contextMenu || !ctx.ui.popover) return
+    this.closePop()
+    this.hostMenu = ctx.ui.contextMenu({ anchor }, [
+      { label: t('tool.once'), icon: 'mouse-pointer-2', run: () => this.setTool(tool) },
+      { label: t('tool.kept'), icon: 'lock', run: () => this.setTool(tool, true) },
+    ], { onClose: () => { this.hostMenu = null } })
+  }
+  private openColors(anchor: HTMLElement, current: string, pick: (color: string) => void): void {
+    this.colorPop?.dispose()
+    const mount = (box: HTMLElement): (() => void) => {
+      const palette = el(`<div class="pr-pop pr-color-menu" data-hosted>${this.dotsHtml(current, 'palette')}</div>`)
+      box.append(palette)
+      const click = (event: Event): void => {
+        const button = (event.target as HTMLElement).closest<HTMLElement>('[data-act="palette"]')
+        if (!button?.dataset.v) return
+        pick(button.dataset.v); this.colorPop?.dispose(); this.colorPop = null
+      }
+      const change = (event: Event): void => {
+        const input = event.target as HTMLInputElement
+        if (!input.matches('input[type="color"]')) return
+        remember(input.value); pick(input.value); this.colorPop?.dispose(); this.colorPop = null
+      }
+      palette.addEventListener('pointerdown', event => event.preventDefault())
+      palette.addEventListener('click', click); palette.addEventListener('change', change)
+      return () => palette.remove()
+    }
+    if (ctx.ui?.popover) {
+      this.colorPop = ctx.ui.popover(anchor, { side: 'bottom', label: t('tool.color'), mount, onClose: () => { this.colorPop = null } })
+    } else {
+      const rect = anchor.getBoundingClientRect(), box = el('<div class="pr-pop" data-kind="palette"></div>')
+      mount(box)
+      this.showPop(box, { left: rect.left, top: rect.top, bottom: rect.bottom }, 'below')
+      this.colorPop = { dispose: () => { box.remove(); if (this.pop === box) this.pop = null } }
+    }
+  }
+  private openSelectionColors(type: 'highlight' | 'underline' | 'strike', anchor: HTMLElement): void {
+    const pages = selectionToQuads(this.viewer), text = this.selText()
+    this.openColors(anchor, this.colors[type], c => { this.setMarkColor(type, c); this.markSelection(type, pages, text); this.renderToolbar() })
   }
 
   private pickColor(c: string, from: HTMLElement): void {
@@ -615,6 +702,7 @@ export class Reader {
     if (kind === 'card') {
       if (!this.selected) return
       this.doc?.patch(this.selected, { color: c })
+      this.pop?.querySelector<HTMLElement>('.pr-color-current')?.style.setProperty('--c', c)
       // 重画这一排:刚用取色器挑的那种原来不在里面。被点的那颗跟着换掉了,键盘焦点还给新的那颗(不然掉到 body 上,Esc、撤销没人听)。
       const dots = this.pop!.querySelector('.pr-dots')!, had = dots.contains(document.activeElement)
       dots.outerHTML = this.dotsHtml(c, 'color')
@@ -806,7 +894,7 @@ export class Reader {
     // 引擎处理这次抬起的监听挂在 window 上、排在我们后面:等它处理完再看白板那边变了没有。
     setTimeout(() => {
       if (this.dead) return
-      this.step(gone) // 形状工具画完不跳回选择:和别的工具一样,留在手上接着画(Esc / 再点一次才回去)
+      this.step(gone) // InkLayer reports successful discrete shapes after the engine finishes this gesture.
     }, 0)
   }
 
@@ -856,8 +944,13 @@ export class Reader {
     this.log.push({ annots, board, ink: p.inkGone }); this.redoLog.length = 0
     if (p.inkGone.length) this.redoCut = true
   }
+  recordCornerEdit(corners: NonNullable<Step['corners']>): void {
+    if (!corners.length) return
+    this.log.push({ annots: [], board: false, corners }); this.redoLog.length = 0; this.redoCut = true
+  }
   undo(): void {
     const s = this.log.pop()
+    if (s?.corners) this.ink?.applyCorners(s.corners, 'before')
     if (s?.annots.length) this.doc?.restore(s.annots)
     if (s?.ink?.length) this.ink?.putBack(s.ink)
     if (!s || s.board) this.ink?.undo()
@@ -865,6 +958,7 @@ export class Reader {
   }
   redo(): void {
     const s = this.redoLog.pop()
+    if (s?.corners) this.ink?.applyCorners(s.corners, 'after')
     // 记下删掉时的样子:撤销之后用户可能又改过评论 / 标签,下次撤销放回的得是改过的这一份。
     if (s?.annots.length) { for (const a of s.annots) this.sel.delete(a.id); s.annots = this.doc?.removeMany(s.annots.map((a) => a.id)) ?? [] }
     if (s?.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
@@ -874,7 +968,7 @@ export class Reader {
 
   /** 把白板层卸掉重挂。引擎的撤销栈跟着没了,账上「白板那一步」作废(删掉的批注照样能撤销回来)。 */
   remountBoard(): void {
-    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink }))
+    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length || s.corners?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink, corners: s.corners }))
     this.log = keep(this.log); this.redoLog = keep(this.redoLog)
     this.ink?.remount()
   }
@@ -928,15 +1022,16 @@ export class Reader {
     if (!rects.length) return
     if (this.bar) { this.showBar(); return }
     // 没有共用划线条的宿主(2.13.3 及更早):自己画浮条。
-    const dots = this.dotsHtml(null, 'color')
+    const markup = (['highlight', 'underline', 'strike'] as const).map(type => `<button class="pr-pbtn" data-pop="${type}" title="${esc(t(`tool.${type}`))}">${icon(type === 'highlight' ? 'highlighter' : type === 'strike' ? 'strikethrough' : 'underline', 14)}</button><button class="pr-pbtn" data-pop="${type}-color" aria-label="${esc(t('tool.color'))}">${icon('chevron-down', 12)}</button>`).join('')
     const b = (act: string, ic: string, tip: string, txt = ''): string => `<button class="pr-pbtn${txt ? ' txt' : ''}" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}${esc(txt)}</button>`
-    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${dots}<span class="pr-sep"></span>${b('underline', 'underline', t('tool.underline'))}${b('strike', 'strikethrough', t('tool.strike'))}${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-square-quote', t('sel.ask'))}</div>`)
+    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${markup}<span class="pr-sep"></span>${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-square-quote', t('sel.ask'))}</div>`)
     pop.addEventListener('pointerdown', (e) => e.preventDefault()) // 点浮条不许把选区点没
     pop.addEventListener('click', (e) => {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')?.dataset.pop
       if (!act) return
       const text = this.selText()
-      if (act === 'underline' || act === 'strike') this.markSelection(act)
+      if (act.endsWith('-color')) this.openSelectionColors(act.replace('-color', '') as 'highlight' | 'underline' | 'strike', (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')!)
+      else if (act === 'highlight' || act === 'underline' || act === 'strike') this.markSelection(act)
       else if (act === 'comment') { const a = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } }
       else if (act === 'copy') { void navigator.clipboard?.writeText(text); ctx.notify?.(t('copy.done')); this.closePop() }
       else if (act === 'cite') { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text }); this.closePop() }
@@ -948,26 +1043,13 @@ export class Reader {
 
   /** 划线条上本视图的工具,和自己画的浮条是同一套:颜色点(含最近挑过的、取色器)、下划线、删除线、写批注、复制、复制引用。 */
   private barTools(): HostSelectionBarTool[] {
-    const hl = (c: string) => (): void => { this.color = c; this.markSelection('highlight'); this.renderToolbar() }
     return [
-      ...[...COLORS, ...recent.filter((c) => !COLORS.includes(c))].map((c) => ({ id: `color-${c.slice(1)}`, title: c, color: c, run: hl(c) })),
-      // ponytail: 宿主把 color 画成色点的 background,渐变照样画得出来:拿它当取色器那颗彩虹点(和工具栏上那颗同一个样子)。
-      { id: 'custom-color', title: t('tool.customColor'), color: 'conic-gradient(#ff6666, #ffd400, #5fb236, #2ea8e5, #a28ae5, #ff6666)', run: () => this.pickSelColor() },
-      { id: 'underline', title: t('tool.underline'), icon: 'underline', run: () => { this.markSelection('underline') } },
-      { id: 'strike', title: t('tool.strike'), icon: 'strikethrough', run: () => { this.markSelection('strike') } },
+      ...(['highlight', 'underline', 'strike'] as const).map(type => ({ id: type, title: t(`tool.${type}`), icon: type === 'highlight' ? 'highlighter' : type === 'underline' ? 'underline' : 'strikethrough',
+        run: () => { this.markSelection(type) }, menu: { title: t('tool.color'), open: (_selection: HostSelectionBarSelection, anchor: HTMLElement) => this.openSelectionColors(type, anchor) } })),
       { id: 'comment', title: t('sel.comment'), icon: 'annotate', run: () => { const a = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } } },
       { id: 'copy', title: t('sel.copy'), icon: 'copy', run: () => { void navigator.clipboard?.writeText(this.selText()); ctx.notify?.(t('copy.done')); this.closePop() } },
       { id: 'cite', title: t('sel.cite'), icon: 'cite', run: () => { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text: this.selText() }); this.closePop() } },
     ]
-  }
-
-  /** 条上放不了 <input type="color">:页面里留一个看不见的,按条上那颗彩虹点时替它点开。挑好之后走 root 的 change → pickColor。 */
-  private pickSelColor(): void {
-    let i = this.root.querySelector<HTMLInputElement>('.pr-selcolor')
-    if (!i) { i = el<HTMLInputElement>('<input type="color" class="pr-selcolor" data-color="sel" tabindex="-1" aria-hidden="true">'); this.root.append(i) }
-    i.value = recent[0] ?? COLORS[0]
-    this.pendingPick = { pages: selectionToQuads(this.viewer), text: this.selText() }
-    i.click() // 按条上那一下是 mousedown,算用户手势,取色器开得出来
   }
 
   private showBar(): void {
@@ -1032,12 +1114,13 @@ export class Reader {
     if (!this.doc) return null
     let first: Annot | null = null
     for (const p of pages) {
-      const a = this.doc.add({ type, page: p.page, color: this.color, quads: p.quads, text: first ? '' : text })
+      const a = this.doc.add({ type, page: p.page, color: this.colors[type], quads: p.quads, text: first ? '' : text })
       first ??= a
     }
     window.getSelection()?.removeAllRanges()
     this.justMade = performance.now()
     this.closePop()
+    if (first && (type === 'highlight' || type === 'underline')) this.completeTool(type)
     return first
   }
 
@@ -1090,7 +1173,8 @@ export class Reader {
     if (!a || !anchor) return
     const ib = (act: string, ic: string, tip: string): string => `<button class="pr-ibtn" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}</button>`
     const pop = el(`<div class="pr-pop pr-card" data-kind="card">
-      <div class="pr-card-top">${this.dotsHtml(a.color, 'color')}<span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-square-quote', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
+      <div class="pr-card-top"><button class="pr-color-trigger" data-pop="color-menu" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${a.color}"></span>${icon('chevron-down', 12)}</button><span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-square-quote', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
+      <div class="pr-card-colors pr-color-menu" hidden></div>
       ${richNotes() ? '<div class="pr-card-body pr-card-md"></div>' : `<textarea class="pr-card-body" rows="2" placeholder="${esc(t('card.placeholder'))}"></textarea>`}
       <div class="pr-card-foot"><span class="pr-tags"></span><span class="pr-flex"></span><span>${esc(t('card.page', { n: a.page + 1 }))} · ${esc(fmtTime(a.created))}</span></div>
     </div>`)
@@ -1110,7 +1194,8 @@ export class Reader {
       const b = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')
       if (!b) return
       const act = b.dataset.pop
-      if (act === 'delete') { this.closePop(); this.sel.delete(id); this.log.push({ annots: this.doc?.removeMany([id]) ?? [], board: false }); this.redoLog.length = 0 }
+      if (act === 'color-menu') { const palette = pop.querySelector<HTMLElement>('.pr-card-colors')!; palette.hidden = !palette.hidden; if (!palette.hidden) palette.innerHTML = this.dotsHtml(a.color, 'color') }
+      else if (act === 'delete') { this.closePop(); this.sel.delete(id); this.log.push({ annots: this.doc?.removeMany([id]) ?? [], board: false }); this.redoLog.length = 0 }
       else if (act === 'cite') this.cite(a)
       else if (act === 'ask') this.ask([a.text, a.comment].filter(Boolean).join('\n\n'), a.page + 1)
       else if (act === 'untag') { this.doc?.patch(id, { tags: (a.tags ?? []).filter((_, i) => i !== Number(b.dataset.i)) }); drawTags() }
@@ -1191,6 +1276,7 @@ export class Reader {
   }
 
   closePop(): void {
+    this.colorPop?.dispose(); this.colorPop = null
     this.dropCardMd()
     this.hideBar()
     const had = this.pop?.contains(document.activeElement)

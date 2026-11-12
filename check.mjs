@@ -52,7 +52,7 @@ await t('装好是空的:仓里不带 PDF、不带批注文件', () => {
 await t('样式不外溢:每条规则都落在 .pr- 下,不写 ::-webkit-scrollbar', () => {
   A.ok(!css.includes('::-webkit-scrollbar'))
   A.ok(!/dashed/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), '界面里不画虚线边框(宿主 DESIGN §6)')
-  const selectors = css.replace(/\/\*[\s\S]*?\*\//g, '').split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)
+  const selectors = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{}]+\{/g, '').split('}').map((r) => r.split('{')[0].trim()).filter(Boolean)
   // 先把 :is(…) 之类括号里的逗号拿掉,再按逗号拆成单条选择器
   const loose = selectors.flatMap((s) => s.replace(/\([^()]*\)/g, '()').split(',')).map((s) => s.trim()).filter((s) => s && !s.includes('.pr-'))
   A.deepEqual(loose, [])
@@ -384,6 +384,38 @@ await t('目录:半路读不出页(文档被关)的结果不进缓存,下次重�
 await t('目录:当前一节 = 最后一个起点在探线之上的', () => {
   const items = [{ page: 0, top: 700 }, { page: 0, top: 300 }, { page: 2, top: 500 }]
   A.deepEqual([O.currentIndex(items, 0, 750), O.currentIndex(items, 0, 600), O.currentIndex(items, 1, 400), O.currentIndex(items, 2, 400), O.currentIndex(items, 2, null)], [-1, 0, 1, 2, 2])
+})
+
+// Discrete tool lifecycle: a cancelled/invalid gesture never consumes the tool.
+const T = await load('src/toolSession.ts')
+for (const tool of ['highlight', 'underline', 'shape']) {
+  for (const navigation of ['select', 'hand']) await t(`一次工具:${tool}完成后回到${navigation}`, () => {
+    const state = new T.ToolSession(); state.activate(navigation); state.activate(tool)
+    A.equal(state.complete(tool), navigation); A.equal(state.active, navigation)
+  })
+  await t(`锁定工具:${tool}连续两次完成都不退出,Esc回之前抓手`, () => {
+    const state = new T.ToolSession(); state.activate('hand'); state.activate(tool, true)
+    A.equal(state.complete(tool), null); A.equal(state.complete(tool), null); A.equal(state.active, tool)
+    A.equal(state.escape(), 'hand'); A.equal(state.locked, false)
+  })
+}
+await t('持续工具:画笔与橡皮不被完成回调消费', () => {
+  const state = new T.ToolSession()
+  for (const tool of ['ink', 'eraser']) { state.activate(tool); A.equal(state.complete(tool), null); A.equal(state.active, tool) }
+})
+await t('迟到完成回调不能退出用户已经换到的工具', () => {
+  const state = new T.ToolSession(); state.activate('shape'); state.activate('underline'); A.equal(state.complete('shape'), null); A.equal(state.active, 'underline')
+})
+await t('空/微小/删除/已有形状均不算新建成功', () => {
+  const previous = new Set(['old']), rect = { id: 'new', type: 'rectangle', width: 30, height: 20 }
+  A.equal(T.validNewShape(rect, previous), true)
+  for (const patch of [{ id: 'old' }, { isDeleted: true }, { width: 0 }, { height: 1 }, { type: 'freedraw' }, { width: NaN }]) A.equal(T.validNewShape({ ...rect, ...patch }, previous), false)
+  A.equal(T.validNewShape({ ...rect, type: 'line', width: 0, height: 20 }, previous), true)
+})
+await t('各工具记色独立,坏配置回缺省不传播非法CSS', () => {
+  const colors = T.markColors({ highlight: '#FF6666', underline: '#2ea8e5', strike: 'url(secret)', text: null })
+  A.equal(colors.highlight, '#ff6666'); A.equal(colors.underline, '#2ea8e5'); A.equal(colors.strike, '#ffd400'); A.equal(colors.text, '#ffd400')
+  A.deepEqual(T.markColors(null), T.DEFAULT_MARK_COLORS)
 })
 
 console.log(fail.length ? `\n${fail.length} 项没过:${fail.join(';')}` : '\n全部通过')

@@ -126,3 +126,13 @@ Requires desktop Forsion 2.13.0 or newer. Desktop only. Side-by-side Ask Tangu r
 新增回归：先构建配套桌面，再在 devlock 的 e2e 锁下运行 `GENESIS_DESKTOP=<桌面目录> node verify/external-motion.cjs`。覆盖冷启动 / 运行中的系统打开事件、库外批注、立即关闭前的保存、重开、导出、宿主浮层与减少动态效果。`node check.mjs` 另覆盖外部文件多标签共享句柄与最终保存。
 
 跨页选区 / 公式色带 / 临时提问面板回归：`GENESIS_DESKTOP=<built desktop> npm run check:selection`；`UI_ZOOM=1.1` 验证界面缩放。
+
+
+## 本轮交互修订（未发布） / Interaction revision (unreleased)
+
+- 高亮、下划线、形状：单击使用一次，成功后返回此前的选择/抓手；双击保持，或点锁按钮菜单选择「保持工具」。触屏长按工具打开同一菜单。Esc返回此前选择/抓手。画笔和橡皮仍连续使用。
+- 划线条主体用该工具上次颜色，箭头打开颜色菜单；颜色按工具记住。方框边角设置仅影响新形状；选择已有方框后可单独修改，加载旧文件不重写边角。
+- Highlight, underline, and shapes run once and return to the previous select/hand tool after a successful mark. Double-click to keep a tool, or use the lock menu; touch users can hold the tool for the same menu. Escape returns to the previous navigation tool. Pen and eraser stay continuous.
+- The primary markup action uses that tool's last color; its arrow opens the color menu. Corner settings affect new shapes; select an existing rectangle to change its corners separately. Loading an old file never normalizes its corners.
+
+回归 / Verification: `npm run verify`；构建配套宿主后，以 `GENESIS_DESKTOP=<host>/desktop npm run check:interactions` 跑隔离真实Electron新交互专项。它创建演示PDF/临时智库，不读取生产数据，覆盖保存重开及另存导出。既有 `verify/smoke.cjs` 是历史全流程载具，其中常驻色点/形状连续使用断言对应旧交互；本轮新交互以独立专项为准，未将旧断言假装通过。

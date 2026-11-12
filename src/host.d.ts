@@ -27,13 +27,14 @@ interface HostBoardOptions {
   pen?: string
   strokeColor?: string
   strokeWidth?: number
+  roundness?: 'sharp' | 'round'
   theme?: 'light' | 'dark'
   onChange?(scene: HostBoardScene): void
   onWheel?(event: WheelEvent): void
   onReady?(): void
 }
 interface HostBoardHandle {
-  update(patch: Partial<Pick<HostBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'theme'>>): void
+  update(patch: Partial<Pick<HostBoardOptions, 'scene' | 'viewport' | 'tool' | 'pen' | 'strokeColor' | 'strokeWidth' | 'roundness' | 'theme'>>): void
   getScene(): HostBoardScene
   undo(): void
   redo(): void
@@ -42,7 +43,7 @@ interface HostBoardHandle {
 
 /** 宿主的划线条(ctx.ui.mountSelectionBar,2.13.3 之后的桌面版本才有)。 */
 interface HostSelectionBarSelection { text: string; markdown?: string }
-interface HostSelectionBarTool { id: string; title: string; icon?: string; color?: string; on?: boolean; run(sel: HostSelectionBarSelection): void }
+interface HostSelectionBarTool { id: string; title: string; icon?: string; color?: string; on?: boolean; menu?: { title: string; open(sel: HostSelectionBarSelection, anchor: HTMLElement): void }; run(sel: HostSelectionBarSelection): void }
 interface HostSelectionBarHandle {
   show(sel: { text: string; markdown?: string; rect: { left: number; right: number; top: number; bottom: number }; getRect?: () => { left: number; right: number; top: number; bottom: number } | null }): void
   hide(): void
