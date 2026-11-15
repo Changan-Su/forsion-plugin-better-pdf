@@ -1,5 +1,16 @@
 # 更新日志
 
+## 0.1.11 — 2026-11-15
+
+- 「问 Tangu」:配套的桌面更新起,主窗口里引文进原生侧栏对话(和笔记划线「问 Tangu」同一个面板),末尾带回到这一页的链接;独立窗口仍在 PDF 旁开面板。
+- 修复:点过「批注栏」后再「问 Tangu」,面板里看不到划线内容(引文被右栏后台的插件对话接走了)。现在右栏已有插件对话时直接引在那里。
+- 页面上的文字批注从 11pt 缩到 9pt,导出的 PDF 同号。
+- 「问 Tangu」图标换成简单的聊天气泡。
+- Ask Tangu: with the companion desktop update, the quote goes to the native side chat in the main window (the same panel notes use), with a link back to the page; detached windows still open a panel beside the PDF.
+- Fixed: after opening the annotation sidebar, Ask Tangu showed no quote in its panel because the plugin's own chat in the sidebar took it. The quote now goes to that sidebar chat when it is open.
+- On-page text annotations shrink from 11pt to 9pt, and exported PDFs match.
+- The Ask Tangu icon is now a plain chat bubble.
+
 ## 0.1.10 — 2026-11-12
 
 - 划线条改为高亮/下划线/删除线动作与独立颜色菜单，各工具记住自己的颜色；工具岛只显示当前色入口，批注卡复用色盘。
