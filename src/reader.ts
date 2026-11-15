@@ -1024,7 +1024,7 @@ export class Reader {
     // 没有共用划线条的宿主(2.13.3 及更早):自己画浮条。
     const markup = (['highlight', 'underline', 'strike'] as const).map(type => `<button class="pr-pbtn" data-pop="${type}" title="${esc(t(`tool.${type}`))}">${icon(type === 'highlight' ? 'highlighter' : type === 'strike' ? 'strikethrough' : 'underline', 14)}</button><button class="pr-pbtn" data-pop="${type}-color" aria-label="${esc(t('tool.color'))}">${icon('chevron-down', 12)}</button>`).join('')
     const b = (act: string, ic: string, tip: string, txt = ''): string => `<button class="pr-pbtn${txt ? ' txt' : ''}" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}${esc(txt)}</button>`
-    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${markup}<span class="pr-sep"></span>${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-square-quote', t('sel.ask'))}</div>`)
+    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${markup}<span class="pr-sep"></span>${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-circle', t('sel.ask'))}</div>`)
     pop.addEventListener('pointerdown', (e) => e.preventDefault()) // 点浮条不许把选区点没
     pop.addEventListener('click', (e) => {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')?.dataset.pop
@@ -1173,7 +1173,7 @@ export class Reader {
     if (!a || !anchor) return
     const ib = (act: string, ic: string, tip: string): string => `<button class="pr-ibtn" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}</button>`
     const pop = el(`<div class="pr-pop pr-card" data-kind="card">
-      <div class="pr-card-top"><button class="pr-color-trigger" data-pop="color-menu" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${a.color}"></span>${icon('chevron-down', 12)}</button><span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-square-quote', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
+      <div class="pr-card-top"><button class="pr-color-trigger" data-pop="color-menu" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${a.color}"></span>${icon('chevron-down', 12)}</button><span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-circle', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
       <div class="pr-card-colors pr-color-menu" hidden></div>
       ${richNotes() ? '<div class="pr-card-body pr-card-md"></div>' : `<textarea class="pr-card-body" rows="2" placeholder="${esc(t('card.placeholder'))}"></textarea>`}
       <div class="pr-card-foot"><span class="pr-tags"></span><span class="pr-flex"></span><span>${esc(t('card.page', { n: a.page + 1 }))} · ${esc(fmtTime(a.created))}</span></div>
