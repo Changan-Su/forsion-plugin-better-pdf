@@ -100,7 +100,7 @@ module.exports = async ({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP 
     await win.locator('.wb-extend').waitFor({state:'detached'})
   }
   const after = await win.locator('.pr-container').evaluate(e=>e.scrollTop)
-  check('PDF and scroll stay put after Ask', await win.locator('.pr-root[data-selection-test="original"]').isVisible() && Math.abs(after-original)<2, JSON.stringify({ original, after }))
+  check('PDF and scroll stay put after Ask', await win.locator('.pr-root[data-selection-test="original"]').isVisible() && Math.abs(after-original)<8, JSON.stringify({ original, after }))  // 侧栏对话揭开时页面会重排几 px(实测 4px),只防跳到别处
   // 文字批注的字号:9pt × 页面缩放(11-15 用户嫌 11pt 太大)。
   await win.keyboard.press('Escape')
   await win.locator('.pr-toolbar [data-act="tool"][data-v="text"]').first().click()
