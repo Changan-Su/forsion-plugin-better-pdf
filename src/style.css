@@ -172,9 +172,10 @@
 .pr-note.sel, .pr-area.sel { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 32%, transparent); }
 /* 旧版本的「区域」框:现在画框用的是「形状」(白板元素),以前存下的照样显示,只是不再填色。 */
 .pr-area { border: 2px solid var(--c); border-radius: 3px; pointer-events: auto; cursor: pointer; z-index: 3; }
+/* 页面上的文字批注:9pt(随页缩放)。11-15 用户嫌 11pt 太大 —— 论文正文多在 9–11pt,批注要比正文小一号;另存 PDF 的 FreeText 同号(export.ts)。 */
 .pr-text {
   min-width: 1.5em; min-height: 1.3em; max-width: calc(var(--total-scale-factor) * 320px); padding: 0 2px; pointer-events: auto; z-index: 3; cursor: text;
-  font: calc(var(--total-scale-factor) * 11px) / 1.35 var(--font-ui, sans-serif); color: color-mix(in srgb, var(--c) 72%, #000); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; border-radius: 2px;
+  font: calc(var(--total-scale-factor) * 9px) / 1.35 var(--font-ui, sans-serif); color: color-mix(in srgb, var(--c) 72%, #000); white-space: pre-wrap; overflow-wrap: anywhere; outline: none; border-radius: 2px;
 }
 .pr-text:focus, .pr-text.sel { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 70%, #000); background: rgba(255, 255, 255, .7); }
 .pr-ink {

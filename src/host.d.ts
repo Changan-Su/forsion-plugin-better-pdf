@@ -82,6 +82,8 @@ declare const ctx: {
   loadData?<T = unknown>(): Promise<T | null>
   saveData?(value: unknown): Promise<void>
   tangu?: {
+    /** 2026-11-15+。把引文交给原生侧栏对话(笔记「问 Tangu」那一个);false = 这里没有侧栏对话。 */
+    askInChat?(text: string): boolean
     mountChat?(el: HTMLElement, o?: { agent?: string; folder?: string; title?: string }): HostChatMount
     startChat?(o: { prompt: string; send?: boolean; folder?: string }): Promise<{ ok: boolean; error?: string }>
   }

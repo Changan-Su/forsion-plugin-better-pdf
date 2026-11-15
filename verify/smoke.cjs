@@ -52,6 +52,9 @@ const fillCard = async (win, text) => {
 }
 /** 目录卡上的「目录 / 缩略图」:宿主有分段控件(ctx.ui.mountControl)时是它的 [role=tab],旧宿主是插件自己的 .pr-sidetab。 */
 const SIDETAB = (v) => `.pr-sidetabs :is(.pr-sidetab[data-v="${v}"], [role="tab"][aria-label="${v === 'toc' ? '目录' : '缩略图'}"])`
+/** 「问 Tangu」送到了没有:宿主有 ctx.tangu.askInChat(2026-11-15 起)时是原生侧栏对话输入框上方的引用卡,旧宿主是插件挂的对话 .pr-chat。 */
+const askLanded = (win, s) => win.evaluate((s) => [...document.querySelectorAll('.att-tile--quote, .pr-chat')].some((e) => e.innerText.replace(/\s+/g, ' ').includes(s.slice(0, 24))), s)
+const askWhere = (win) => win.evaluate(() => ([...document.querySelectorAll('.att-tile--quote')].map((e) => e.innerText).join(' | ') || document.querySelector('.pr-chat')?.innerText || '(没有对话视图)').slice(0, 160))
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  ${detail}` : ''}`); if (!ok) fails.push(name) }
 
 /** 摆台用的样张:一篇像样的四页短论文(标题、摘要、各节、一张表、参考文献),内容是现编的。 */
@@ -236,8 +239,8 @@ async function main() {
       check('②h 条上有本视图的工具和共用动作,本视图的在前', want.every((a) => acts.includes(a)) && acts.indexOf('cite') < acts.indexOf('ask'), acts.join())
       await win.waitForTimeout(250); await win.screenshot({ path: path.join(SHOTS, '1h-hostbar.png') })
       await win.locator(`${SELPOP} [data-act="ask"]`).first().click()
-      const asked = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S2), 8000)
-      check('②h 条上的「问 Tangu」走插件自己的:引文递进右栏的对话', !!asked, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
+      const asked = await until(() => askLanded(win, S2), 8000)
+      check('②h 条上的「问 Tangu」走插件自己的:引文递进右栏的对话', !!asked, await askWhere(win))
       await win.locator('.pr-toolbar [data-act="panel"]').click(); await win.waitForSelector('.pr-listhead', { timeout: 8000 })
       await win.waitForTimeout(500)
       await dragSelect(win, S2); await shown(win, SELPOP)
@@ -339,8 +342,8 @@ async function main() {
     // ④b 问 Tangu:右栏切到对话,原文挂成输入框上方的引用(不替用户发送;后端是假引擎,不跑模型)
     await win.mouse.click((b1.left + b1.right) / 2, b1.y0); await win.waitForTimeout(300)
     await win.locator('.pr-card [data-pop="ask"]').click()
-    const quoted = await until(() => win.evaluate((s) => !!document.querySelector('.pr-chat') && document.querySelector('.pr-chat').innerText.includes(s.slice(0, 24)), S1), 8000)
-    check('④b 问 Tangu:引文递进右栏的对话', !!quoted, await win.evaluate(() => (document.querySelector('.pr-chat')?.innerText ?? '(没有对话视图)').slice(0, 160)))
+    const quoted = await until(() => askLanded(win, S1), 8000)
+    check('④b 问 Tangu:引文递进右栏的对话', !!quoted, await askWhere(win))
     await win.screenshot({ path: path.join(SHOTS, '2b-ask.png') })
     // ④c 目录:在左栏(11-03 起)。悬浮目录的刻度:2.13.8 起叫 .lcl-ftoc-tick,2.13.7 叫 .lcl-ftoc-bar,缺省是「目录」那一格;右栏不再自动开「大纲」
     check('④c 右栏不再自动开「大纲」', !(await win.locator('.dv-tab [title="大纲"], .dv-tab[title="大纲"], .dv-tab:has([aria-label="大纲"])').count()))

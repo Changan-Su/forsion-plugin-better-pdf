@@ -1627,10 +1627,16 @@ export class Reader {
     ctx.notify?.(t('cite.copied'), { level: 'success' })
   }
 
-  /** 把一段原文递给 Tangu:挂成右栏对话输入框上方的引用条,不替用户发送。 */
+  /** 把一段原文递给 Tangu:挂成对话输入框上方的引用条,不替用户发送。
+   *  先交给原生侧栏对话(和笔记的「问 Tangu」同一个面板,11-15 用户定);独立窗 / 桌面卡片里没有它,才退回本文件的临时面板。 */
   private ask(text: string, page: number): void {
     if (!text) return
-    const quoted = `${text}\n\n— ${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
+    const label = `${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
+    // 库里的文件写成双链(点得回这一页,Tangu 也读得到原件);库外的只写名字和页码。
+    const from = /^([a-zA-Z]:)?[\\/]/.test(this.pdfPath) ? label : `[[${this.pdfPath}#page=${page}|${label}]]`
+    // 宿主按 20000 字截断:先截原文,出处那行(回到这一页的链接)不能被截掉。
+    if (hasRight(this.root) && ctx.tangu?.askInChat?.(`${text.slice(0, 20_000 - from.length - 3)}\n— ${from}`)) return
+    const quoted = `${text}\n\n— ${label}`
     if (ctx.tangu?.mountChat && this.extension) {
       const previous = this.askSession
       if (previous?.panel.isOpen) {

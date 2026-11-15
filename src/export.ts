@@ -50,10 +50,10 @@ function writeAnnot(doc: PDFDocument, a: Annot): void {
     if (a.type === 'note') addAnnot(doc, page, a, { Subtype: 'Text', Rect: [x0, y0 - 20, x0 + 20, y0], Name: 'Comment', Open: false })
     else if (a.type === 'area') addAnnot(doc, page, a, { Subtype: 'Square', Rect: [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)], BS: { W: 1.5 } })
     else if (a.type === 'text' && a.text) {
-      const lines = a.text.split('\n'), w = Math.min(320, Math.max(...lines.map((l) => l.length)) * 11 + 8), h = lines.length * 15 + 4
+      const lines = a.text.split('\n'), w = Math.min(320, Math.max(...lines.map((l) => l.length)) * 9 + 8), h = lines.length * 12 + 4
       const c = parseColor(a.color) ?? [0, 0, 0, 1]
       // ponytail: 不写外观流,由阅读器自己排字(Acrobat / pdf.js 都会);个别阅读器里中文可能显示成方块,要稳得嵌字体。
-      addAnnot(doc, page, { ...a, comment: a.text }, { Subtype: 'FreeText', Rect: [x0, y0 - h, x0 + w, y0], DA: PDFString.of(`/Helv 11 Tf ${c.slice(0, 3).map((v) => (v * 0.72).toFixed(3)).join(' ')} rg`) })
+      addAnnot(doc, page, { ...a, comment: a.text }, { Subtype: 'FreeText', Rect: [x0, y0 - h, x0 + w, y0], DA: PDFString.of(`/Helv 9 Tf ${c.slice(0, 3).map((v) => (v * 0.72).toFixed(3)).join(' ')} rg`) })
     }
   }
 }

@@ -1,5 +1,8 @@
 // Real PDF.js + native extension regression. Called by ONLY=selection smoke.cjs.
-const path = require('path')
+const path = require('path'); const fs = require('fs')
+// 宿主能把引文交给原生侧栏对话(ctx.tangu.askInChat,2026-11-15 起)时,主窗口的「问 Tangu」走它;旧宿主仍走文件的临时面板。
+const DESK = process.env.GENESIS_DESKTOP || path.resolve(__dirname, '../../../Forsion-Genesis/desktop')
+const NATIVE_ASK = (() => { try { return fs.readFileSync(path.join(DESK, 'frontend/src/amadeus/plugins/pluginStore.ts'), 'utf8').includes('askInChat: (text') } catch { return false } })()
 module.exports = async ({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP }) => {
   // The user's system clipboard may change while this isolated fixture runs.
   await win.evaluate(() => Object.defineProperty(navigator.clipboard, 'writeText', { value: async (text) => { window.__pdfCopied = text } }))
@@ -74,12 +77,45 @@ module.exports = async ({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP 
   await win.locator(SELPOP).waitFor({state:'visible'})
   const original = await win.locator('.pr-root').evaluate(el => {el.dataset.selectionTest='original'; return document.querySelector('.pr-container').scrollTop})
   await win.locator(`${SELPOP} [data-act="ask"]`).click()
-  check('Ask opens native extension and includes the quote', !!await until(()=>win.locator('.wb-extend .pr-chat').innerText().then(t=>t.includes(S1)),10000))
+  // 11-15:主窗口里交给原生侧栏对话(笔记「问 Tangu」那一个),引文挂成输入框上方的引用卡;不开文件自己的临时面板。
+  // 旧宿主没有 ctx.tangu.askInChat 时仍走临时面板(下面独立窗那段同一条退路)。
+  const nativeAsk = NATIVE_ASK
+  if (nativeAsk) {
+    const quote = await until(() => win.locator('.att-tile--quote').first().innerText().then((t) => t.includes(S1.slice(0, 24)) && t), 10000)
+    check('Ask hands the quote to the native side chat', !!quote, String(quote))
+    check('Ask does not open the file extension panel', await win.locator('.wb-extend').count() === 0)
+    // 出处是双链 [[文献/Reading Fixture.pdf#page=1|Reading Fixture.pdf · 第 1 页]]:点开引用卡,预览里渲染成那段别名。
+    await win.locator('.att-tile--quote .att-tile-open').first().click()
+    const preview = await until(() => win.locator('.quote-preview-body').innerText().then((t) => t.includes('第 1 页') && t), 5000)
+    check('Quote ends with a link back to the page', !!preview, String(preview))
+    await win.screenshot({path:path.join(SHOTS,'selection-ask-preview.png')})
+    await win.keyboard.press('Escape')
+  } else {
+    check('Ask opens native extension and includes the quote', !!await until(()=>win.locator('.wb-extend .pr-chat').innerText().then(t=>t.includes(S1)),10000))
+  }
   check('Original PDF stays mounted beside chat', await win.locator('.pr-root[data-selection-test="original"]').isVisible())
   await win.screenshot({path:path.join(SHOTS,'selection-ask-main.png')})
-  await win.locator('.wb-extend-close').click()
-  await win.locator('.wb-extend').waitFor({state:'detached'})
-  check('Close returns to the same PDF and scroll', await win.locator('.pr-root[data-selection-test="original"]').isVisible() && Math.abs(await win.locator('.pr-container').evaluate(e=>e.scrollTop)-original)<2)
+  if (!nativeAsk) {
+    await win.locator('.wb-extend-close').click()
+    await win.locator('.wb-extend').waitFor({state:'detached'})
+  }
+  const after = await win.locator('.pr-container').evaluate(e=>e.scrollTop)
+  check('PDF and scroll stay put after Ask', await win.locator('.pr-root[data-selection-test="original"]').isVisible() && Math.abs(after-original)<2, JSON.stringify({ original, after }))
+  // 文字批注的字号:9pt × 页面缩放(11-15 用户嫌 11pt 太大)。
+  await win.keyboard.press('Escape')
+  await win.locator('.pr-toolbar [data-act="tool"][data-v="text"]').first().click()
+  const pg = await win.locator('.pr-root .page[data-page-number="1"]').boundingBox()
+  await win.mouse.click(pg.x + pg.width * 0.12, pg.y + pg.height * 0.06)
+  await win.keyboard.type('Margin note')
+  const size = await win.evaluate(() => {
+    const e = document.querySelector('.pr-text'); if (!e) return null
+    // 样张是 Letter(612pt 宽):页面的布局宽度 / 612 = 每 pt 多少 px(--total-scale-factor 读出来是没算过的 calc)。
+    const k = e.closest('.page').offsetWidth / 612
+    return { px: parseFloat(getComputedStyle(e).fontSize), k, pt: parseFloat(getComputedStyle(e).fontSize) / k }
+  })
+  check('Text annotation is 9pt at page scale', !!size && Math.abs(size.pt - 9) < 0.2, JSON.stringify(size))
+  await win.screenshot({path:path.join(SHOTS,'selection-text-note.png')})
+  await win.keyboard.press('Escape')
   const pending = app.waitForEvent('window')
   await win.evaluate(()=>window.tangu.openDetached([{type:'amadeus-plugin-file',params:{filePath:'文献/Reading Fixture.pdf'}}]))
   const detached = await pending
