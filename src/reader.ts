@@ -1024,7 +1024,7 @@ export class Reader {
     // 没有共用划线条的宿主(2.13.3 及更早):自己画浮条。
     const markup = (['highlight', 'underline', 'strike'] as const).map(type => `<button class="pr-pbtn" data-pop="${type}" title="${esc(t(`tool.${type}`))}">${icon(type === 'highlight' ? 'highlighter' : type === 'strike' ? 'strikethrough' : 'underline', 14)}</button><button class="pr-pbtn" data-pop="${type}-color" aria-label="${esc(t('tool.color'))}">${icon('chevron-down', 12)}</button>`).join('')
     const b = (act: string, ic: string, tip: string, txt = ''): string => `<button class="pr-pbtn${txt ? ' txt' : ''}" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}${esc(txt)}</button>`
-    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${markup}<span class="pr-sep"></span>${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-square-quote', t('sel.ask'))}</div>`)
+    const pop = el(`<div class="pr-pop pr-selpop" data-kind="sel">${markup}<span class="pr-sep"></span>${b('comment', 'sticky-note', t('sel.comment'))}<span class="pr-sep"></span>${b('copy', 'copy', t('sel.copy'))}${b('cite', 'text-quote', t('sel.cite'), t('sel.cite'))}${b('ask', 'message-circle', t('sel.ask'))}</div>`)
     pop.addEventListener('pointerdown', (e) => e.preventDefault()) // 点浮条不许把选区点没
     pop.addEventListener('click', (e) => {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')?.dataset.pop
@@ -1173,7 +1173,7 @@ export class Reader {
     if (!a || !anchor) return
     const ib = (act: string, ic: string, tip: string): string => `<button class="pr-ibtn" data-pop="${act}" title="${esc(tip)}" aria-label="${esc(tip)}">${icon(ic, 14)}</button>`
     const pop = el(`<div class="pr-pop pr-card" data-kind="card">
-      <div class="pr-card-top"><button class="pr-color-trigger" data-pop="color-menu" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${a.color}"></span>${icon('chevron-down', 12)}</button><span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-square-quote', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
+      <div class="pr-card-top"><button class="pr-color-trigger" data-pop="color-menu" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${a.color}"></span>${icon('chevron-down', 12)}</button><span class="pr-flex"></span>${a.text || a.comment ? ib('cite', 'text-quote', t('sel.cite')) + ib('ask', 'message-circle', t('sel.ask')) : ''}${ib('delete', 'trash-2', t('card.delete'))}</div>
       <div class="pr-card-colors pr-color-menu" hidden></div>
       ${richNotes() ? '<div class="pr-card-body pr-card-md"></div>' : `<textarea class="pr-card-body" rows="2" placeholder="${esc(t('card.placeholder'))}"></textarea>`}
       <div class="pr-card-foot"><span class="pr-tags"></span><span class="pr-flex"></span><span>${esc(t('card.page', { n: a.page + 1 }))} · ${esc(fmtTime(a.created))}</span></div>
@@ -1627,11 +1627,20 @@ export class Reader {
     ctx.notify?.(t('cite.copied'), { level: 'success' })
   }
 
-  /** 把一段原文递给 Tangu:挂成右栏对话输入框上方的引用条,不替用户发送。 */
+  /** 把一段原文递给 Tangu:挂成对话输入框上方的引用条,不替用户发送。
+   *  先交给原生侧栏对话(和笔记的「问 Tangu」同一个面板,11-15 用户定);独立窗 / 桌面卡片里没有它,才退回本文件的临时面板。 */
   private ask(text: string, page: number): void {
     if (!text) return
-    const quoted = `${text}\n\n— ${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
-    if (ctx.tangu?.mountChat && this.extension) {
+    const label = `${baseOf(this.pdfPath)} · ${t('card.page', { n: page })}`
+    // 库里的文件写成双链(点得回这一页,Tangu 也读得到原件);库外的只写名字和页码。
+    const from = /^([a-zA-Z]:)?[\\/]/.test(this.pdfPath) ? label : `[[${this.pdfPath}#page=${page}|${label}]]`
+    // 宿主按 20000 字截断:先截原文,出处那行(回到这一页的链接)不能被截掉。
+    if (hasRight(this.root) && ctx.tangu?.askInChat?.(`${text.slice(0, 20_000 - from.length - 3)}\n— ${from}`)) return
+    const quoted = `${text}\n\n— ${label}`
+    // 右栏已经挂着本插件的对话(同一个文件夹 = 同一个引用目标)时不再开临时面板:宿主的引用位只有一个,
+    // 会被藏在后台标签里的那份先接走,临时面板里就看不到引文(11-15 用户报「划线内容没被引用进去」,台架复现)。
+    const docked = !!chat.owner && chat.folder === this.folder && hasRight(this.root)
+    if (ctx.tangu?.mountChat && this.extension && !docked) {
       const previous = this.askSession
       if (previous?.panel.isOpen) {
         previous.enqueue(quoted)
