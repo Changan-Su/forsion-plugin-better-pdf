@@ -116,11 +116,26 @@ module.exports = async ({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP 
   check('Text annotation is 9pt at page scale', !!size && Math.abs(size.pt - 9) < 0.2, JSON.stringify(size))
   await win.screenshot({path:path.join(SHOTS,'selection-text-note.png')})
   await win.keyboard.press('Escape')
+  // 批注卡上的「问 Tangu」走同一条:点开前面那条跨页下划线的卡片,问,侧栏对话里多一张引用卡。
+  if (NATIVE_ASK) {
+    const before = await win.locator('.att-tile--quote').count()
+    // 批注层在文本层下面,点它要按坐标点(同 smoke.cjs ④b):先滚到视图中间
+    await win.locator('.pr-ul').first().evaluate((e) => e.scrollIntoView({ block: 'center' })); await win.waitForTimeout(400)
+    const ul = await win.locator('.pr-ul').first().boundingBox()
+    await win.mouse.click(ul.x + ul.width / 2, ul.y + ul.height / 2); await win.locator('.pr-card [data-pop="ask"]').waitFor({ state: 'visible', timeout: 5000 })
+    await win.locator('.pr-card [data-pop="ask"]').click()
+    check('Annotation card Ask lands in the native side chat too', !!await until(async () => await win.locator('.att-tile--quote').count() > before, 6000), String(await win.locator('.att-tile--quote').count()))
+    check('Annotation card Ask opens no extension panel', await win.locator('.wb-extend').count() === 0)
+    // 收卡、取消选中,焦点交回 PDF(下面独立窗那段要从干净状态开始)
+    await win.keyboard.press('Escape'); await win.locator('.pr-container').focus(); await win.keyboard.press('Escape'); await win.waitForTimeout(400)
+  }
   const pending = app.waitForEvent('window')
   await win.evaluate(()=>window.tangu.openDetached([{type:'amadeus-plugin-file',params:{filePath:'文献/Reading Fixture.pdf'}}]))
   const detached = await pending
   await detached.waitForSelector('.pr-root .textLayer span',{timeout:30000})
   await detached.waitForTimeout(1000)
+  // 阅读位置会跟着文件记:上面卡片那步把主窗滚下去了,独立窗也开在那里(S1 会压在工具岛底下)。回到顶上再选。
+  await detached.evaluate(() => { document.querySelector('.pr-container').scrollTop = 0 }); await detached.waitForTimeout(400)
   await dragSelect(detached,S1)
   await detached.locator(SELPOP).waitFor({state:'visible'})
   await detached.locator(`${SELPOP} [data-act="ask"]`).click()

@@ -1637,7 +1637,10 @@ export class Reader {
     // 宿主按 20000 字截断:先截原文,出处那行(回到这一页的链接)不能被截掉。
     if (hasRight(this.root) && ctx.tangu?.askInChat?.(`${text.slice(0, 20_000 - from.length - 3)}\n— ${from}`)) return
     const quoted = `${text}\n\n— ${label}`
-    if (ctx.tangu?.mountChat && this.extension) {
+    // 右栏已经挂着本插件的对话(同一个文件夹 = 同一个引用目标)时不再开临时面板:宿主的引用位只有一个,
+    // 会被藏在后台标签里的那份先接走,临时面板里就看不到引文(11-15 用户报「划线内容没被引用进去」,台架复现)。
+    const docked = !!chat.owner && chat.folder === this.folder && hasRight(this.root)
+    if (ctx.tangu?.mountChat && this.extension && !docked) {
       const previous = this.askSession
       if (previous?.panel.isOpen) {
         previous.enqueue(quoted)
