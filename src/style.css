@@ -180,8 +180,13 @@
 .pr-text:focus, .pr-text.sel { box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 70%, #000); background: rgba(255, 255, 255, .7); }
 .pr-ink {
   position: absolute; overflow: visible; pointer-events: none; mix-blend-mode: multiply;
-  left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px); width: calc(var(--total-scale-factor) * var(--w) * 1px);
+  left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px);
+  /* 按页内 pt 排版、整体按页面倍数放大。动的那一阵(滚 / 缩放)提成独立图层:缩放过程中拉伸现成的图(和 pdf.js 缩放时拉伸页面画布一个道理),
+     停下撤掉 will-change 再按新倍数画清楚 —— 不然每一步都要把整页笔迹重新栅格化。 */
+  width: calc(var(--w) * 1px); transform: scale(var(--total-scale-factor)); transform-origin: 0 0;
 }
+.pr-ink > img { display: block; width: 100%; height: auto; -webkit-user-drag: none; user-select: none; }
+.pr-root:is(.pr-scrolling, .pr-zooming) .pr-ink { will-change: transform; }
 /* 白板层:铺满视口、盖在页面上方。指针默认穿过去,该它收的时候由脚本打开(ink.ts)。
    笔迹和页面「正片叠底」(静态图同样):荧光笔不盖字,深色笔看不出差别。
    同一份笔迹两种画法只露一种:白板层画好了(.pr-inking)且页面没在滚 → 白板层;否则 → 各页的静态图。 */

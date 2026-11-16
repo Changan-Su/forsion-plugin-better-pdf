@@ -9,7 +9,7 @@
 //
 // 跑(在 Forsion 仓根;桌面端先 npm run build 出 out/):
 //   node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 批注跟手探针" --eta=8 -- node Forsion-Instrumentality-Project/forsion-plugin-pdf-reader/verify/ink-follow.cjs
-// GENESIS_DESKTOP / UI_ZOOM / CPU / HEAVY 同 ink-latency.cjs。
+// GENESIS_DESKTOP / UI_ZOOM / CPU / HEAVY 同 ink-latency.cjs;ONLY= 只跑某些场景;EXTRA_CSS= 注入一段样式再量;PROFILE= 录这一场景的 CPU profile。
 // ⚠️ 笔迹色块是照真笔迹改了点位拼出来的,粗笔下它在白板层和静态图里的轮廓会差十几像素(真笔画只差 ~2px,11-16 实画验过),所以只用缺省粗细。结果打在终端,原始数据和每个场景的一张截图落 .shots/ink-follow/。
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const { launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium, topSelf } = require('./ink-latency.cjs')
@@ -139,12 +139,16 @@ async function condition(home, vault, label) {
     await win.waitForSelector('.pr-root .textLayer span', { timeout: 25000 }); await sleep(1500)
     await win.waitForSelector('.pr-board canvas', { timeout: 20000, state: 'attached' }) // 文档里有笔迹:白板层自己挂上
     await win.evaluate(INSTALL)
+    // EXTRA_CSS='<css>':往页面里加一段样式再量(排查用,比如试着把某一层藏掉看卡顿是不是它)
+    if (process.env.EXTRA_CSS) await win.evaluate((css) => { const s = document.createElement('style'); s.textContent = css; document.head.append(s) }, process.env.EXTRA_CSS)
     for (const tool of ['select', 'ink']) {
       if (tool === 'ink') { await win.locator('.pr-toolbar [data-v="ink"]').click(); await sleep(1200) }
       for (const kind of ['scroll', 'zoom']) {
         await win.locator('.pr-zoomsel').selectOption('page-width'); await sleep(1200)
         const name = `${label}/${tool === 'select' ? '选择' : '手写'}/${kind === 'scroll' ? '滚动' : '缩放'}`
         // PROFILE=<条件名>(如 600笔/选择/缩放):这一场景录一份 CPU profile
+        // ONLY=<条件名的一部分>,逗号分隔:只跑名字里带这些的场景(如 ONLY=600笔/选择/缩放)
+        if (process.env.ONLY && !process.env.ONLY.split(',').some((k) => name.includes(k))) continue
         const prof = process.env.PROFILE === name
         if (prof) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 }); await cdp.send('Profiler.start') }
         res[name] = await scenario(win, cdp, an, kind)
@@ -191,7 +195,7 @@ async function main() {
   }
 
   const results = { meta: { uiZoom: process.env.UI_ZOOM || '1', cpu: Number(process.env.CPU) || 1, heavy: HEAVY, at: new Date().toISOString() } }
-  write(0); Object.assign(results, await condition(home, vault, '轻'))
+  if (!process.env.ONLY || process.env.ONLY.includes('轻')) { write(0); Object.assign(results, await condition(home, vault, '轻')) }
   if (HEAVY > 0) { write(HEAVY); Object.assign(results, await condition(home, vault, `${HEAVY}笔`)) }
   fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2))
 

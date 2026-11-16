@@ -52,8 +52,10 @@ export class InkLayer {
   private readonly prefs: Record<string, { color: string | null; width: number | null }> = {}
   private readonly shapePref: { color: string | null; width: number | null } = { color: INK_COLORS[2], width: 1 } // 形状的线宽引擎按两倍算:1 档画出来是 2pt
   /** html:右栏小图用的那份序列化(第一次要时才做,之后原样给);rev:换过一次图就加一,右栏凭它判断要不要重画。 */
-  private readonly svgs = new Map<number, { el: HTMLElement; sig: string; html?: string; rev: number }>()
+  private readonly svgs = new Map<number, { el: HTMLElement; svg: SVGSVGElement; url: string; sig: string; html?: string; rev: number }>()
   private svgRev = 0
+  /** 关掉之后还在出图的那一份回来时直接丢掉(不然建出的图片地址没人回收)。 */
+  private disposed = false
   private tops: number[] = []
   private widths: number[] = []
   private commitTimer: ReturnType<typeof setTimeout> | null = null
@@ -181,22 +183,28 @@ export class InkLayer {
   onPageRendered(page: number): void { void this.renderPage(page) }
 
   private async renderPage(page: number): Promise<void> {
+    if (this.disposed) return
     const els = this.r.doc?.data.ink[page]
     const s = sig(els)
     let cur = this.svgs.get(page)
-    if (!els?.length) { cur?.el.remove(); this.svgs.delete(page); return }
+    if (!els?.length) { if (cur) { cur.el.remove(); URL.revokeObjectURL(cur.url) } this.svgs.delete(page); return }
     if (!cur || cur.sig !== s) {
       const out = await ctx.ui!.boardToSvg!({ elements: els }, { theme: 'light', padding: 4 }).catch((e) => { console.error('[pdf-reader] 笔迹出图失败', e); return null })
-      if (!out || sig(this.r.doc?.data.ink[page]) !== s) return // 出图期间又改了:让后一次来画
+      if (!out || this.disposed || sig(this.r.doc?.data.ink[page]) !== s) return // 出图期间又改了 / 已关掉:让后一次来画
       const box = document.createElement('div')
       box.className = 'pr-ink'
       box.style.cssText = `--x:${out.x.toFixed(2)};--y:${out.y.toFixed(2)};--w:${out.width.toFixed(2)}`
       out.svg.setAttribute('width', '100%')
       out.svg.removeAttribute('height')
-      out.svg.style.display = 'block'
-      box.append(out.svg)
-      this.svgs.get(page)?.el.remove()
-      cur = { el: box, sig: s, rev: ++this.svgRev }
+      // 页面上放成一张图(<img>),不放内联 SVG:内联时每一笔都是一个元素,缩放时页面的倍数变量一变,几百个 path 都要重算样式、重排版
+      // (降速 4× + 600 笔实测:藏掉静态图,缩放时 >33ms 的帧 57 → 33)。右栏小图仍用 SVG 源码(thumb)。
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(out.svg)], { type: 'image/svg+xml' }))
+      const img = document.createElement('img')
+      img.src = url; img.alt = ''; img.draggable = false
+      box.append(img)
+      const old = this.svgs.get(page)
+      if (old) { old.el.remove(); URL.revokeObjectURL(old.url) }
+      cur = { el: box, svg: out.svg, url, sig: s, rev: ++this.svgRev }
       this.svgs.set(page, cur)
       this.r.emit() // 右栏列表里这一页的小图有了
     }
@@ -208,7 +216,7 @@ export class InkLayer {
   }
 
   /** 列表里的小图:这一页笔迹的静态图(没画出来过就没有)。 */
-  thumb(page: number): string { const cur = this.svgs.get(page); if (!cur) return ''; return (cur.html ??= cur.el.innerHTML) }
+  thumb(page: number): string { const cur = this.svgs.get(page); if (!cur) return ''; return (cur.html ??= cur.svg.outerHTML) }
   /** 这一页小图的版本号(没有图 = 0)。右栏拿它当「要不要重画」的依据,不去序列化整张图。 */
   thumbRev(page: number): number { return this.svgs.get(page)?.rev ?? 0 }
 
@@ -521,6 +529,7 @@ export class InkLayer {
   }
 
   dispose(): void {
+    this.disposed = true
     this.entering++
     if (this.commitTimer) clearTimeout(this.commitTimer)
     if (this.scrollTimer) clearTimeout(this.scrollTimer)
@@ -535,7 +544,7 @@ export class InkLayer {
     window.removeEventListener('pointercancel', this.onCancel, true)
     window.removeEventListener('blur', this.onBlur)
     this.shapeGesture = null
-    for (const s of this.svgs.values()) s.el.remove()
+    for (const s of this.svgs.values()) { s.el.remove(); URL.revokeObjectURL(s.url) }
     this.svgs.clear()
   }
 }
