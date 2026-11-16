@@ -111,6 +111,33 @@ function watchWrites(dir, match) {
   return { t, close: () => w.close() }
 }
 
+/** CPU profile → 自身耗时前 25 的函数(按 函数名 @ 文件:行 合并),整份落 OUT。 */
+function topSelf(profile, label) {
+  fs.writeFileSync(path.join(OUT, `${label}.cpuprofile`), JSON.stringify(profile))
+  const dt = new Map(); const { samples, timeDeltas, nodes } = profile
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  samples.forEach((id, i) => dt.set(id, (dt.get(id) ?? 0) + (timeDeltas[i] ?? 0)))
+  const agg = new Map()
+  for (const [id, us] of dt) {
+    const f = byId.get(id).callFrame
+    if (f.functionName === '(idle)' || f.functionName === '(program)') continue
+    const k = `${f.functionName || '(anon)'} @ ${f.url.split('/').pop()}:${f.lineNumber + 1}:${f.columnNumber + 1}`
+    agg.set(k, (agg.get(k) ?? 0) + us)
+  }
+  // 含子调用的总耗时:每个采样沿调用栈往上,每个函数记一次
+  const parent = new Map(); for (const n of nodes) for (const c of n.children ?? []) parent.set(c, n.id)
+  const key = (n) => { const f = n.callFrame; return `${f.functionName || '(anon)'} @ ${f.url.split('/').pop()}:${f.lineNumber + 1}` }
+  const incl = new Map()
+  samples.forEach((id, i) => {
+    const seen = new Set(); let cur = id
+    while (cur != null) { const k = key(byId.get(cur)); if (!seen.has(k)) { seen.add(k); incl.set(k, (incl.get(k) ?? 0) + (timeDeltas[i] ?? 0)) } cur = parent.get(cur) }
+  })
+  console.log(`\n── ${label} 含子调用耗时前 30(ms,只列 main.js / 宿主脚本)──`)
+  for (const [k, us] of [...incl].filter(([k]) => /main\.js|\.js:/.test(k) && !/^\(/.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 30)) console.log(`${(us / 1000).toFixed(1).padStart(8)}  ${k}`)
+  console.log(`\n── ${label} CPU 自身耗时前 25(ms)──`)
+  for (const [k, us] of [...agg].sort((a, b) => b[1] - a[1]).slice(0, 25)) console.log(`${(us / 1000).toFixed(1).padStart(8)}  ${k}`)
+}
+
 const q = (arr, p) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))] }
 const r1 = (v) => Math.round(v * 10) / 10
 
@@ -189,8 +216,12 @@ async function pdfCondition(win, cdp, vault, label) {
   const y0 = Math.max(pg.y, vp.y) + 40, y1 = Math.min(pg.y + pg.height, vp.y + vp.height) - 40
   const box = { x: pg.x + 40, y: y0, w: pg.width - 80, h: y1 - y0 }
   const writes = watchWrites(vault, (f) => f.includes('annot.json'))
+  // PROFILE=pdf-heavy(或 pdf-empty / board-…):这一条件下录一份 CPU profile,打出自身耗时最多的函数
+  const prof = process.env.PROFILE === label
+  if (prof) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 }); await cdp.send('Profiler.start') }
   try {
     const res = await run(win, cdp, box, writes, '.pr-board .excalidraw')
+    if (prof) topSelf((await cdp.send('Profiler.stop')).profile, label)
     await win.screenshot({ path: path.join(OUT, `${label}.png`) }).catch(() => {})
     return res
   } finally { writes.close() }
@@ -212,7 +243,10 @@ async function boardCondition(win, cdp, vault, title, label) {
   const box = { x: c.x + c.width * 0.2, y: c.y + c.height * 0.2, w: c.width * 0.6, h: c.height * 0.6 }
   const writes = watchWrites(vault, (f) => f.startsWith(title))
   try {
+    const prof = process.env.PROFILE === label
+    if (prof) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 }); await cdp.send('Profiler.start') }
     const res = await run(win, cdp, box, writes, '.amx-drawview .excalidraw')
+    if (prof) topSelf((await cdp.send('Profiler.stop')).profile, label)
     await win.screenshot({ path: path.join(OUT, `${label}.png`) }).catch(() => {})
     return res
   } finally { writes.close() }
@@ -276,4 +310,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })
-module.exports = { DESK, launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium }
+module.exports = { DESK, launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium, topSelf }

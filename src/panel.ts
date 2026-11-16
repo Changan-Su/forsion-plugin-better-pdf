@@ -46,7 +46,7 @@ export function mountAnnots(host: HTMLElement): () => void {
   const draw = (r: Reader | null): void => {
     const doc = r?.doc
     // 翻页也会走到这里;内容没变就不重画(重画会打断正在进行的滚动和悬停)。
-    const key = JSON.stringify([r?.pdfPath, !!doc, r?.selected, filter, locale(), doc?.data.annots.map((a) => a.modified), doc && Object.entries(doc.data.ink).map(([p, l]) => [p, l.length, r?.ink?.thumb(Number(p)).length])])
+    const key = JSON.stringify([r?.pdfPath, !!doc, r?.selected, filter, locale(), doc?.data.annots.map((a) => a.modified), doc && Object.entries(doc.data.ink).map(([p, l]) => [p, l.length > 0, r?.ink?.thumbRev?.(Number(p)) ?? 0])])
     if (key === last) return
     last = key
     input.placeholder = t('list.filter')

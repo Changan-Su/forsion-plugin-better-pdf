@@ -51,7 +51,9 @@ export class InkLayer {
   /** 每支笔记着用户给它挑的颜色 / 粗细;null = 用这支笔自己的。形状另记一份。 */
   private readonly prefs: Record<string, { color: string | null; width: number | null }> = {}
   private readonly shapePref: { color: string | null; width: number | null } = { color: INK_COLORS[2], width: 1 } // 形状的线宽引擎按两倍算:1 档画出来是 2pt
-  private readonly svgs = new Map<number, { el: HTMLElement; sig: string }>()
+  /** html:右栏小图用的那份序列化(第一次要时才做,之后原样给);rev:换过一次图就加一,右栏凭它判断要不要重画。 */
+  private readonly svgs = new Map<number, { el: HTMLElement; sig: string; html?: string; rev: number }>()
+  private svgRev = 0
   private tops: number[] = []
   private widths: number[] = []
   private commitTimer: ReturnType<typeof setTimeout> | null = null
@@ -69,14 +71,23 @@ export class InkLayer {
   private touched = false
   /** 抬笔就收:不等下面那个 300ms 的攒批(引擎收尾这一笔时再变一次,由攒批补上)。
    *  不看 dirty:画得快时引擎的变化回调还没来得及报(实测一笔画完才报),而能在这块板上抬笔,它手里就不是旧快照。 */
+  /** 按在白板层上、还没抬起的指针。按着的时候不收数据(引擎每一帧都报变化,收一次要扫全部笔迹 + 通知一圈),抬笔再收。
+   *  抬起 / 取消 / 窗口失焦 / 换工具都会清掉,不会卡住。 */
+  private readonly downs = new Set<number>()
   private readonly onDown = (ev: PointerEvent): void => {
+    // 缩放刚停、白板层还透明着:引擎手里的视口是缩放前的,这一下交给它会画歪。先推视口露出来,这一下不给它(抬笔再落就是对的)。
+    // 带悬停的笔在落下之前就把它叫醒了(reader 的 onPressMove),走不到这里。
+    if (this.wake()) { ev.preventDefault(); ev.stopImmediatePropagation(); return }
+    if (this.role === 'draw') this.downs.add(ev.pointerId)
     if (!this.shaping || this.role !== 'draw' || !this.handle || ev.button !== 0) return
     const ids = (this.shape === 'line' || this.shape === 'arrow') && this.shapeGesture ? this.shapeGesture.ids : new Set(this.handle.getScene().elements.map(e => e.id))
     this.shapeGesture = { pointer: ev.pointerId, ids, ended: false, x: ev.clientX, y: ev.clientY }
   }
-  private readonly onCancel = (): void => { this.shapeGesture = null }
+  private readonly onCancel = (ev: PointerEvent): void => { this.shapeGesture = null; this.downs.delete(ev.pointerId); this.schedule() }
+  private readonly onBlur = (): void => { this.downs.clear(); this.schedule() }
   private readonly onUp = (ev: PointerEvent): void => {
-    if (!this.owns(ev.target) && this.shapeGesture?.pointer !== ev.pointerId) return
+    const was = this.downs.delete(ev.pointerId)
+    if (!this.owns(ev.target) && this.shapeGesture?.pointer !== ev.pointerId) { if (was) this.schedule(); return }
     if (this.shapeGesture?.pointer === ev.pointerId) {
       const linear = this.shape === 'line' || this.shape === 'arrow'
       this.shapeGesture.ended = !linear || Math.hypot(ev.clientX - this.shapeGesture.x, ev.clientY - this.shapeGesture.y) >= 2
@@ -107,6 +118,12 @@ export class InkLayer {
     this.board.addEventListener('keydown', this.onFinalize, true)
     window.addEventListener('pointerup', this.onUp, true)
     window.addEventListener('pointercancel', this.onCancel, true)
+    window.addEventListener('blur', this.onBlur)
+  }
+
+  /** 攒一下再收(引擎给一笔收尾、键盘挪动这类不经抬笔的变化)。笔还按着就不排,抬笔时再排。 */
+  private schedule(): void {
+    if (this.dirty && !this.commitTimer && !this.downs.size) this.commitTimer = setTimeout(() => { this.commit(false); this.finishShape() }, 300)
   }
 
   private get pref(): { color: string | null; width: number | null } { return this.shaping ? this.shapePref : (this.prefs[this.pen] ??= { color: null, width: null }) }
@@ -179,7 +196,7 @@ export class InkLayer {
       out.svg.style.display = 'block'
       box.append(out.svg)
       this.svgs.get(page)?.el.remove()
-      cur = { el: box, sig: s }
+      cur = { el: box, sig: s, rev: ++this.svgRev }
       this.svgs.set(page, cur)
       this.r.emit() // 右栏列表里这一页的小图有了
     }
@@ -191,7 +208,9 @@ export class InkLayer {
   }
 
   /** 列表里的小图:这一页笔迹的静态图(没画出来过就没有)。 */
-  thumb(page: number): string { return this.svgs.get(page)?.el.innerHTML ?? '' }
+  thumb(page: number): string { const cur = this.svgs.get(page); if (!cur) return ''; return (cur.html ??= cur.el.innerHTML) }
+  /** 这一页小图的版本号(没有图 = 0)。右栏拿它当「要不要重画」的依据,不去序列化整张图。 */
+  thumbRev(page: number): number { return this.svgs.get(page)?.rev ?? 0 }
 
   // ── 白板层 ──
   /** 阅读器换了工具。 */
@@ -203,6 +222,8 @@ export class InkLayer {
     this.tool = tool === 'ink' ? 'freedraw' : tool === 'eraser' ? 'eraser' : tool === 'shape' ? this.shape : 'selection'
     this.picked.clear()
     this.touched = false
+    this.downs.clear()
+    this.settleNow() // 滚动 / 缩放还没收尾就换了工具:当场推视口、露出白板层(不然新工具落下的第一下拿的是旧视口)
     this.board.style.pointerEvents = this.role === 'draw' ? 'auto' : 'none'
     if (this.handle) {
       this.handle.update({ tool: this.tool, ...this.style() })
@@ -232,12 +253,13 @@ export class InkLayer {
     }
     this.dirty = false
     this.held = sigAll(r.doc.data.ink)
+    this.lastVp = null
     const h = this.handle = ctx.ui!.mountBoard!(this.board, {
       scene: { elements: this.sceneElements() }, viewport: this.viewport(), tool: this.tool, theme: 'light', ...this.style(),
-      onChange: () => { this.dirty = true; if (!this.commitTimer) this.commitTimer = setTimeout(() => { this.commit(); this.finishShape() }, 300) }, // 落笔时每一帧都来,攒一下
+      onChange: () => { this.dirty = true; this.schedule() }, // 落笔时每一帧都来:按着的时候不收,抬笔再收
       onWheel: (ev) => {
         if (ev.ctrlKey || ev.metaKey) r.onWheel(ev)
-        else r.container.scrollBy(ev.deltaX, ev.deltaY)
+        else { r.container.scrollBy(ev.deltaX, ev.deltaY); this.syncViewport() } // 同一拍就推,不等 scroll 事件(那要晚一帧)
       },
       // 引擎画出第一帧之后再把静态图换下去,中间不留一段两边都没有的空白。(用定时器不用 rAF:窗口不在前台时 rAF 不走。)
       onReady: () => setTimeout(() => { if (this.handle === h) r.root.classList.add('pr-inking') }, SETTLE),
@@ -257,7 +279,9 @@ export class InkLayer {
   /** 批注数据变了(自己刚收的一笔、别的标签画的、别的窗口写的被并进来):静态图和白板层都跟上。 */
   onDocChanged(): void {
     const ink = this.r.doc?.data.ink
-    if (this.role !== 'draw' || !this.handle) this.refreshStatic() // 正画着的时候不出图(每一笔都重出整页太重),换工具时补
+    // 正画着的时候不每笔出图(重出整页太重):停笔一阵再补,缩放时才有一份跟得上的静态图可换(见 onZoom);换工具时也补
+    if (this.role !== 'draw' || !this.handle) this.refreshStatic()
+    else this.scheduleStatic()
     if (!this.handle) { if (this.hasInk()) void this.enter(); return }
     if (this.dirty || sigAll(ink) === this.held) return // 自己刚提交的那次签名对得上,不动
     this.held = sigAll(ink)
@@ -290,19 +314,86 @@ export class InkLayer {
     return { zoom, scrollX: (pr.left - br.left) / k / zoom + div.clientLeft / zoom - o.x, scrollY: (pr.top - br.top) / k / zoom + div.clientTop / zoom - o.y }
   }
 
-  syncViewport(): void { if (this.handle) this.handle.update({ viewport: this.viewport() }) }
+  /** 上次推给白板的视口。没变就不推(推一次引擎就整份重画一遍)。 */
+  private lastVp: HostBoardViewport | null = null
+  syncViewport(): void {
+    if (!this.handle) return
+    const v = this.viewport(), l = this.lastVp
+    if (l && Math.abs(l.scrollX - v.scrollX) < 1e-6 && Math.abs(l.scrollY - v.scrollY) < 1e-6 && Math.abs(l.zoom - v.zoom) < 1e-9) return
+    this.lastVp = v
+    this.handle.update({ viewport: v })
+  }
+
+  /** 页面缩放了。手写时白板层要一直跟着(笔随时会落下);别的时候和滚动一样:动的这一阵换静态图、不推视口,停下来推一次。 */
+  onZoom(): void {
+    if (!this.handle) return
+    if (this.role !== 'draw') { this.motion(); return }
+    // 手写时:缩放一步引擎就得按新倍数重生成每一笔的缓存,一路推下去整份重画(实测比不推还卡)。
+    // 静态图跟得上就换静态图、停下再推;跟不上(刚写完还没补出图)就照旧一路推。
+    if (this.zoomHide || this.staticFresh()) this.hideForZoom()
+    else this.syncViewport()
+  }
+  /** 手写时缩放的这一阵:白板层透明(不是 visibility:hidden —— 笔还得落在它上面,见 onDown 的 wake)、不推视口。 */
+  private zoomHide = false
+  private hideForZoom(): void {
+    const root = this.r.root
+    this.zoomHide = true
+    root.classList.add('pr-zooming')
+    if (this.scrollTimer) clearTimeout(this.scrollTimer)
+    this.scrollTimer = setTimeout(() => {
+      this.syncViewport()
+      this.scrollTimer = setTimeout(() => this.unhide(), SETTLE)
+    }, 140)
+  }
+  /** 手写时缩放刚停、白板层还透明着,笔就来了:马上推视口、露出来。返回 true = 刚才确实藏着。 */
+  wake(): boolean {
+    if (!this.zoomHide) return false
+    this.settleNow()
+    return true
+  }
+  /** 滚动 / 缩放这一阵的收尾(两种藏法共用一个定时器,收尾也只有这一处,谁先谁后都不会把对方的收尾弄丢):两种都撤掉。 */
+  private unhide(): void {
+    this.scrollTimer = null
+    this.zoomHide = false
+    this.r.root.classList.remove('pr-scrolling', 'pr-zooming')
+    if (this.last) this.hover(this.last[0], this.last[1])
+  }
+  /** 不等了,马上收尾:先把视口推到位(白板层露出来时引擎手里必须是现在的视口),再撤掉藏法。 */
+  private settleNow(): void {
+    if (!this.scrollTimer && !this.zoomHide && !this.r.root.matches('.pr-scrolling, .pr-zooming')) return
+    if (this.scrollTimer) clearTimeout(this.scrollTimer)
+    this.syncViewport()
+    this.unhide()
+  }
+  /** 每页静态图是不是和数据一致(没有没收的改动、每页图的签名对得上、没有多余的图)。 */
+  private staticFresh(): boolean {
+    const ink = this.r.doc?.data.ink ?? {}
+    if (this.dirty) return false
+    for (const [p, l] of Object.entries(ink)) if (l.length && this.svgs.get(Number(p))?.sig !== sig(l)) return false
+    for (const p of this.svgs.keys()) if (!ink[p]?.length) return false
+    return true
+  }
+  private staticTimer: ReturnType<typeof setTimeout> | null = null
+  private scheduleStatic(): void {
+    if (this.staticTimer) clearTimeout(this.staticTimer)
+    this.staticTimer = setTimeout(() => { this.staticTimer = null; this.refreshStatic() }, 1200)
+  }
 
   /** 页面滚了。画的时候滚轮是白板层交回来、由脚本滚的,同一帧里推得上;别的时候页面是浏览器自己滚的,
    *  白板层跟不上那一帧 —— 滚的这一阵换成跟着页面走的静态图,停下来再换回白板层。 */
   onScroll(): void {
     if (!this.handle) return
-    if (this.role === 'draw') { this.syncViewport(); return }
+    if (this.role === 'draw') { if (this.zoomHide) this.hideForZoom(); else this.syncViewport(); return } // 缩放带出来的滚动:接着藏、不推
+    this.motion()
+  }
+  /** 动的这一阵:白板层藏起来、露出跟着页面走的静态图;停下 140ms 推一次视口,再过一拍换回白板层。藏着的时候不推视口(推了也看不见,白画)。 */
+  private motion(): void {
     const root = this.r.root
     root.classList.add('pr-scrolling')
     if (this.scrollTimer) clearTimeout(this.scrollTimer)
     this.scrollTimer = setTimeout(() => {
       this.syncViewport()
-      this.scrollTimer = setTimeout(() => { root.classList.remove('pr-scrolling'); if (this.last) this.hover(this.last[0], this.last[1]) }, SETTLE)
+      this.scrollTimer = setTimeout(() => this.unhide(), SETTLE)
     }, 140)
   }
 
@@ -396,8 +487,9 @@ export class InkLayer {
     setTimeout(() => { if (this.handle === h && this.role !== 'draw') h.update({ tool: this.tool }) }, 80) // 引擎是下一拍才清的
   }
 
-  /** 白板上的元素按页拆回去,存页内坐标。 */
-  private commit(): void {
+  /** 白板上的元素按页拆回去,存页内坐标。write = false:不立刻写盘,交给批注文件自己的 0.4 秒攒批(给一笔收尾这类补变化用;
+   *  抬笔、删除、撤销这些「一手」的收尾照旧马上写 —— 退出应用时宿主不等渲染层)。 */
+  private commit(write = true): void {
     if (this.commitTimer) clearTimeout(this.commitTimer)
     this.commitTimer = null
     const doc = this.r.doc
@@ -412,10 +504,10 @@ export class InkLayer {
     doc.data.ink = ink
     this.held = sigAll(ink)
     this.moved = true
-    doc.changed()
+    doc.changed('ink')
     // 一笔一存:退出应用时宿主不等渲染层收尾,刚画的一笔不能留在定时器里。
     // ponytail: 每次都是整份重写(写前还读一遍);笔迹攒到几 MB 时每笔一次读写会变重,到时按页拆文件。
-    void doc.flush()
+    if (write) void doc.flush()
   }
 
   /** 把白板层卸掉重挂(引擎自己记着的状态 —— 比如「见过手写笔」—— 就此清零)。 */
@@ -432,6 +524,7 @@ export class InkLayer {
     this.entering++
     if (this.commitTimer) clearTimeout(this.commitTimer)
     if (this.scrollTimer) clearTimeout(this.scrollTimer)
+    if (this.staticTimer) clearTimeout(this.staticTimer)
     this.commit()
     this.handle?.dispose()
     this.handle = null
@@ -440,6 +533,7 @@ export class InkLayer {
     this.board.removeEventListener('keydown', this.onFinalize, true)
     window.removeEventListener('pointerup', this.onUp, true)
     window.removeEventListener('pointercancel', this.onCancel, true)
+    window.removeEventListener('blur', this.onBlur)
     this.shapeGesture = null
     for (const s of this.svgs.values()) s.el.remove()
     this.svgs.clear()

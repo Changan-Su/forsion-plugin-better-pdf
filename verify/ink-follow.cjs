@@ -9,9 +9,10 @@
 //
 // 跑(在 Forsion 仓根;桌面端先 npm run build 出 out/):
 //   node .claude/hooks/devlock.cjs run --vehicle=e2e --what="PDF 批注跟手探针" --eta=8 -- node Forsion-Instrumentality-Project/forsion-plugin-pdf-reader/verify/ink-follow.cjs
-// GENESIS_DESKTOP / UI_ZOOM / CPU / HEAVY 同 ink-latency.cjs。结果打在终端,原始数据和每个场景的一张截图落 .shots/ink-follow/。
+// GENESIS_DESKTOP / UI_ZOOM / CPU / HEAVY 同 ink-latency.cjs。
+// ⚠️ 笔迹色块是照真笔迹改了点位拼出来的,粗笔下它在白板层和静态图里的轮廓会差十几像素(真笔画只差 ~2px,11-16 实画验过),所以只用缺省粗细。结果打在终端,原始数据和每个场景的一张截图落 .shots/ink-follow/。
 const fs = require('fs'); const os = require('os'); const path = require('path')
-const { launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium } = require('./ink-latency.cjs')
+const { launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium, topSelf } = require('./ink-latency.cjs')
 const HERE = path.resolve(__dirname, '..')
 const OUT = process.env.OUT_DIR || path.join(HERE, '.shots', 'ink-follow'); fs.mkdirSync(OUT, { recursive: true })
 const HEAVY = Number(process.env.HEAVY ?? 600)
@@ -142,7 +143,12 @@ async function condition(home, vault, label) {
       if (tool === 'ink') { await win.locator('.pr-toolbar [data-v="ink"]').click(); await sleep(1200) }
       for (const kind of ['scroll', 'zoom']) {
         await win.locator('.pr-zoomsel').selectOption('page-width'); await sleep(1200)
-        res[`${label}/${tool === 'select' ? '选择' : '手写'}/${kind === 'scroll' ? '滚动' : '缩放'}`] = await scenario(win, cdp, an, kind)
+        const name = `${label}/${tool === 'select' ? '选择' : '手写'}/${kind === 'scroll' ? '滚动' : '缩放'}`
+        // PROFILE=<条件名>(如 600笔/选择/缩放):这一场景录一份 CPU profile
+        const prof = process.env.PROFILE === name
+        if (prof) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 200 }); await cdp.send('Profiler.start') }
+        res[name] = await scenario(win, cdp, an, kind)
+        if (prof) topSelf((await cdp.send('Profiler.stop')).profile, name.replace(/\//g, '-'))
       }
     }
   } finally { await an.close(); await app.close().catch(() => {}) }
@@ -200,4 +206,5 @@ async function main() {
   console.log(`\n原始数据:${path.join(OUT, 'results.json')}`)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })
+module.exports = { makePdf, inkMarker, hlMarker, PDF }

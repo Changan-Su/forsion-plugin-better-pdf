@@ -104,7 +104,8 @@ export class AnnotDoc {
   readonly = false
   /** 内存里有还没写到盘上的改动。写成功才清;写失败留着,下次 flush(含关标签时)再试。 */
   dirty = false
-  private subs = new Set<() => void>()
+  /** what = 'ink':只有笔迹变了(页面上的高亮、便签不用重画)。不给 = 什么都可能变了。 */
+  private subs = new Set<(what?: 'ink') => void>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private writing: Promise<void> = Promise.resolve()
   /** 盘上那份的原文(上次读到 / 写下的);null = 盘上没有。 */
@@ -154,14 +155,14 @@ export class AnnotDoc {
     }
   }
 
-  subscribe(cb: () => void): () => void {
+  subscribe(cb: (what?: 'ink') => void): () => void {
     this.subs.add(cb)
     return () => { this.subs.delete(cb) }
   }
 
-  /** 改完 data 之后调:通知界面重画,并安排落盘。 */
-  changed(): void {
-    for (const cb of [...this.subs]) cb()
+  /** 改完 data 之后调:通知界面重画,并安排落盘。what = 'ink':只动了笔迹。 */
+  changed(what?: 'ink'): void {
+    for (const cb of [...this.subs]) cb(what)
     if (this.readonly) return
     this.dirty = true
     if (this.timer) clearTimeout(this.timer)
