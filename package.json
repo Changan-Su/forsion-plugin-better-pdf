@@ -12,7 +12,8 @@
     "check:external": "node verify/external-motion.cjs",
     "check:reading-position": "node verify/reading-position.cjs",
     "check:selection": "ONLY=selection node verify/smoke.cjs",
-    "check:interactions": "node verify/interactions.cjs"
+    "check:interactions": "node verify/interactions.cjs",
+    "check:ink-latency": "node verify/ink-latency.cjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
