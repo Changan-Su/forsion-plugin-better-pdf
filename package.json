@@ -14,7 +14,8 @@
     "check:selection": "ONLY=selection node verify/smoke.cjs",
     "check:interactions": "node verify/interactions.cjs",
     "check:ink-latency": "node verify/ink-latency.cjs",
-    "check:ink-follow": "node verify/ink-follow.cjs"
+    "check:ink-follow": "node verify/ink-follow.cjs",
+    "check:ink-regress": "node verify/ink-regress.cjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
