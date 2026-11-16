@@ -275,4 +275,5 @@ async function main() {
   console.log(`\n原始数据:${path.join(OUT, 'results.json')}`)
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })
+module.exports = { DESK, launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium }
