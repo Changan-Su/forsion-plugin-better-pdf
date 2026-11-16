@@ -1,5 +1,14 @@
 # 更新日志
 
+## 未发布
+
+- 手写更跟手:写字时不再每一帧都收数据、右栏不再每笔重画小图;笔迹多的文档里每写完一笔不会再顿一下。
+- 手写工具下滚动,笔迹不再落后页面一帧(需要配套的桌面更新;旧版桌面上和以前一样)。
+- 缩放时笔迹换成跟着页面走的静态图,停下再换回,笔迹多时缩放不再卡;缩放刚停就落笔不会再画偏。
+- Handwriting feels more responsive: the plugin no longer saves on every frame while you write or redraws sidebar thumbnails per stroke, so documents with lots of ink no longer stutter after each stroke.
+- With the pen tool, ink no longer trails the page by a frame while scrolling (needs the companion desktop update; older desktops behave as before).
+- While zooming, ink switches to a static image that moves with the page and swaps back when you stop, so zooming stays smooth with lots of ink, and a stroke started right after zooming lands in the right place.
+
 ## 0.1.11 — 2026-11-15
 
 - 「问 Tangu」:配套的桌面更新起,主窗口里引文进原生侧栏对话(和笔记划线「问 Tangu」同一个面板),末尾带回到这一页的链接;独立窗口仍在 PDF 旁开面板。

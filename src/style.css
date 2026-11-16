@@ -186,7 +186,9 @@
    笔迹和页面「正片叠底」(静态图同样):荧光笔不盖字,深色笔看不出差别。
    同一份笔迹两种画法只露一种:白板层画好了(.pr-inking)且页面没在滚 → 白板层;否则 → 各页的静态图。 */
 .pr-board { position: absolute; inset: 0; z-index: 3; mix-blend-mode: multiply; pointer-events: none; }
-.pr-root.pr-inking:not(.pr-scrolling) .pr-ink { visibility: hidden; }
+.pr-root.pr-inking:not(.pr-scrolling):not(.pr-zooming) .pr-ink { visibility: hidden; }
+/* 手写时缩放的那一阵:白板层只是透明(笔还得落在它上面把它叫醒,见 ink.ts onZoom / wake),露出静态图 */
+.pr-root.pr-zooming .pr-board { opacity: 0; }
 .pr-root:not(.pr-inking) .pr-board, .pr-root.pr-scrolling .pr-board { visibility: hidden; }
 
 /* 抓手:抓手工具、按住空格、拖动中。整块视口(连文字层、白板层)都换成手,别让字上的 I 形光标露出来。 */

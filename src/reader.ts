@@ -327,7 +327,7 @@ export class Reader {
       const doc = await acquire(this.pdfPath, pdf.fingerprints?.[0] ?? '', this.io)
       if (this.dead) { await release(doc, this.io); return }
       this.doc = doc
-      this.off.push(doc.subscribe(() => { this.repaint(); this.ink?.onDocChanged(); this.emit() }))
+      this.off.push(doc.subscribe((what) => { if (what !== 'ink') this.repaint(); this.ink?.onDocChanged(); this.emit() })) // 只动了笔迹:各页的高亮 / 便签不用重画
       this.viewer.setDocument(pdf)
       this.linkService.setDocument(pdf, null)
       this.viewer.findController.setDocument(pdf)
@@ -363,7 +363,7 @@ export class Reader {
     })
     eventBus.on('textlayerrendered', () => this.refreshSelection())
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
-    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.syncViewport(); this.placeAnchors() })
+    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.onZoom(); this.placeAnchors() })
     eventBus.on('updateviewarea', ({ location }: { location?: { pageNumber: number; top: number; left: number } }) => {
       this.syncToc(location?.pageNumber, location?.top)
       if (!location || !this.positionKey || !this.pagesLoaded || this.pendingPosition || this.dead
@@ -835,7 +835,7 @@ export class Reader {
       ev.stopPropagation()
       if (ev.pointerId !== f.id) return
       const c = this.container, z = c.offsetWidth ? c.getBoundingClientRect().width / c.offsetWidth : 1
-      if (!this.penDown) c.scrollBy((f.x - ev.clientX) / z, (f.y - ev.clientY) / z)
+      if (!this.penDown) { c.scrollBy((f.x - ev.clientX) / z, (f.y - ev.clientY) / z); this.ink?.syncViewport() } // 白板层同一拍跟上,不等 scroll 事件
       f.x = ev.clientX; f.y = ev.clientY
       f.far = Math.max(f.far, Math.hypot(f.x - f.x0, f.y - f.y0))
       return
@@ -843,7 +843,7 @@ export class Reader {
     const p = this.press
     if (p?.tail && ev.pointerId === p.id) { ev.stopPropagation(); if (ev.buttons) this.eraseAlong(ev.clientX, ev.clientY) }
     else if (p) { if (p.onBoard && this.tool === 'eraser' && ev.pointerId === p.id && ev.buttons) this.eraseAlong(ev.clientX, ev.clientY) }
-    else if (!ev.buttons && ev.pointerType !== 'touch') this.ink?.hover(ev.clientX, ev.clientY)
+    else if (!ev.buttons && ev.pointerType !== 'touch') { if (ev.pointerType === 'pen') this.ink?.wake(); this.ink?.hover(ev.clientX, ev.clientY) } // 笔悬停:手写时缩放刚停,先把白板层叫醒
   }
 
   private onPressUp(ev: PointerEvent): void {
@@ -1558,12 +1558,14 @@ export class Reader {
     const box = this.q('.pr-anchors'), items = this.toc?.items
     if (!items?.length || !this.ftoc) { box.textContent = ''; return }
     if (box.childElementCount !== items.length) box.innerHTML = items.map((_, i) => `<div data-i="${i}"></div>`).join('')
-    items.forEach((it, i) => {
+    // 先全部量完再一起写:边量边写的话每一项都会逼浏览器重新排一次版(缩放时每一步都走这里,降速 profile 里看得到)
+    const tops = items.map((it) => {
       const pv = this.viewer.getPageView?.(it.page)
-      if (!pv?.div) return
+      if (!pv?.div) return null
       const y = it.top == null ? 0 : pv.viewport.convertToViewportPoint(it.x ?? 0, it.top)[1]
-      ;(box.children[i] as HTMLElement).style.top = `${offsetIn(pv.div, this.container) + y}px`
+      return offsetIn(pv.div, this.container) + y
     })
+    tops.forEach((top, i) => { if (top != null) (box.children[i] as HTMLElement).style.top = `${top}px` })
   }
 
   /** 左栏收着时,页面左边浮一条宿主的悬浮目录(没有这个接口的宿主上就不出现);左栏开着时目录已经在那儿,不重复。 */
