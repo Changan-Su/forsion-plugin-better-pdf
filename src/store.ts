@@ -83,14 +83,29 @@ function mergeSidecar(base: Partial<Sidecar> | null, ours: Sidecar, theirs: Part
 }
 
 // 指纹 → 上次见到它的旁挂文件路径(存在插件自己的数据里):PDF 改名 / 挪走后按它把批注带过来。
-let seen: Record<string, string> | null = null
-async function seenMap(): Promise<Record<string, string>> {
-  if (!seen) seen = ((await ctx.loadData?.<{ seen?: Record<string, string> }>().catch(() => null))?.seen) ?? {}
+// 只读一次,缓存的是这次读的 Promise:两份 PDF 同时打开时各读一份、后读回来的那份顶掉先记下的,存回去就少一条。
+// 存过却读不出来(宿主 2026-11-17 起 reject,code = 'plugin-data-unreadable':读错误 / 零字节 / 写到一半 / 被手改坏):
+// 按空表接着记、下一次存就把整张表盖掉。所以这时认领不查、也不再存,只提示一次,等插件下次加载再读。
+// 没存过(null)照旧是空表;旧宿主读不出来也回 null,只能当空。
+let seen: Promise<Record<string, string>> | null = null
+let seenBlocked = false
+const isDataUnreadable = (e: unknown): boolean => !!e && typeof e === 'object' && (e as { code?: unknown }).code === 'plugin-data-unreadable'
+function seenMap(): Promise<Record<string, string>> {
+  seen ??= Promise.resolve()
+    .then(() => ctx.loadData?.<{ seen?: Record<string, string> }>())
+    .then((d) => d?.seen ?? {}, (e) => {
+      if (isDataUnreadable(e)) {
+        seenBlocked = true
+        console.warn('[pdf-reader] saved PDF location records could not be read; matching renamed PDFs is paused', e)
+        ctx.notify?.(t('seen.unreadable'), { level: 'warning' })
+      }
+      return {}
+    })
   return seen
 }
 async function remember(fingerprint: string, path: string): Promise<void> {
   const m = await seenMap()
-  if (m[fingerprint] === path) return
+  if (seenBlocked || m[fingerprint] === path) return
   m[fingerprint] = path
   await ctx.saveData?.({ seen: m }).catch(() => {})
 }

@@ -113,6 +113,7 @@ const M: Record<string, [string, string]> = {
   'save.broken': ['旧的批注文件读不出来,已另存为 {name},这次从空白开始。', 'The old annotation file could not be read. It was kept as {name}; starting from blank.'],
   'save.brokenStuck': ['批注文件读不出来,也没能另存一份。为了不动原件,这次打开只读,新批注不会保存。', 'The annotation file could not be read or backed up. To leave it untouched, this session is read-only and new annotations are not saved.'],
   'save.newer': ['这份批注是更新版本的插件写的,为免损坏,这里只读。', 'These annotations were written by a newer version of the plugin and are read-only here.'],
+  'seen.unreadable': ['读不出已保存的 PDF 位置记录,改名或挪动后认回批注先停用,这份记录也不会更新,原来的记录没有动。批注照常保存;只是改过名或挪过位置的 PDF 这次看不到以前的批注,在它上面新加的批注会另存一份,以前的批注仍在 PDF 原来位置旁的批注文件里,不会被删掉。', 'Your saved PDF location records could not be read. Matching annotations to renamed or moved PDFs is paused and the records won\'t be updated, so the originals are left as they were. Annotations still save as usual, but a PDF you renamed or moved won\'t show its earlier annotations for now. New annotations on it are saved separately, and the earlier ones stay in the annotation file next to the PDF\'s old location. Nothing is deleted.'],
   'export.done': ['已导出到 {name}', 'Exported to {name}'],
   'export.failed': ['导出失败', 'Export failed'],
   'export.name': ['{name}(带批注)', '{name} (annotated)'],
