@@ -4,7 +4,8 @@
  *  2. 插件的形状:不声明 fileExtensions(.pdf 是「接管」内置类型,不是自有类型)、装好是空的、样式不外溢。
  *  3. 文案:每条都有中英两种,英文里不夹汉字,占位符两边一致。
  *  4. 批注存取的几条保命路径(读不出来的旧文件绝不覆盖、新版本写的文件只读、改名后认回来、没批注不留空文件、
- *     两个窗口不互相盖、没存上的留着重试、刚关又开不丢、窗口要关时同步写、一次删几条再撤销)
+ *     两个窗口不互相盖、没存上的留着重试、刚关又开不丢、窗口要关时同步写、一次删几条再撤销、
+ *     插件数据里的位置记录读不出来时不写也不认领)
  *     和选区 / 白板元素的几何 —— 用内存里的假宿主跑。
  * 界面交互要真应用:见 verify/smoke.cjs。
  */
@@ -314,6 +315,71 @@ await t('关闭和重开同拍发生:活文档不被移出共享缓存或最后�
   A.equal(reopened, another)
   A.equal(another.refs, 2)
   await S.release(reopened); await S.release(another)
+})
+
+// 插件自己存的「指纹 → 旁挂文件路径」存过却读不出来(宿主 reject,code = 'plugin-data-unreadable'):
+// 认领不查、这张表不再存、只提示一次;批注本身照常落盘。旧宿主读不出来回 null:照常记、不提示。
+const unreadable = () => Object.assign(new Error('plugin-data-unreadable'), { code: 'plugin-data-unreadable', reason: 'invalid-json' })
+const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0)) }
+function seenHost(loadData) {
+  const host = fakeHost()
+  host.saves = []; host.notices = []
+  globalThis.ctx.loadData = loadData
+  globalThis.ctx.saveData = async (v) => { host.saves.push(JSON.parse(JSON.stringify(v))) }
+  globalThis.ctx.notify = (m, o) => host.notices.push({ m, o })
+  return host
+}
+/** 读不出来时的一整段:开一份、加批注、关掉;再开一份已有批注的;再开改了名的第一份。 */
+async function blockedRun() {
+  const h = seenHost(async () => { throw unreadable() })
+  const S = await load('src/store.ts')
+  const d = await S.acquire('旧/P.pdf', 'fp-p'); d.add(A1); await d.flush(); await S.release(d); await settle()
+  h.files.set('.Q.pdf.annot.json', enc.encode(JSON.stringify({ version: 1, fingerprint: 'fp-q', annots: [], ink: {}, note: 'n.md' })))
+  await S.acquire('Q.pdf', 'fp-q'); await settle()
+  const moved = await S.acquire('新/P2.pdf', 'fp-p'); await moved.flush(); await settle()
+  return { h, moved }
+}
+await t('位置记录存过却读不出来:打开、加批注、再开几份,插件数据一次都不写', async () => {
+  const { h } = await blockedRun()
+  A.equal(h.saves.length, 0, `写了 ${JSON.stringify(h.saves)}`)
+})
+await t('位置记录存过却读不出来:提示一次(级别 warning),再开几份不重复', async () => {
+  const { h } = await blockedRun()
+  A.equal(h.notices.length, 1, JSON.stringify(h.notices))
+  A.equal(h.notices[0]?.m, tr('seen.unreadable')); A.equal(h.notices[0]?.o?.level, 'warning')
+})
+await t('位置记录存过却读不出来:提示中英都有,英文不夹汉字、不带路径', () => {
+  const [zh, en] = MESSAGES['seen.unreadable'] ?? []
+  A.ok(zh && en, '缺文案'); A.ok(!/[一-鿿]/.test(en)); A.ok(!/[/\\]/.test(zh + en), '文案里不写路径')
+  const was = globalThis.ctx.getLocale
+  globalThis.ctx.getLocale = () => 'en'
+  try { A.equal(tr('seen.unreadable'), en) } finally { globalThis.ctx.getLocale = was }
+})
+await t('位置记录存过却读不出来:批注照常落盘;改了名的 PDF 不去认领,原处那份不动', async () => {
+  const { h, moved } = await blockedRun()
+  A.equal(saved(h.files, '旧/.P.pdf.annot.json').annots.length, 1, '批注本身没落盘')
+  A.equal(moved.data.annots.length, 0, '读不出位置记录时不该按指纹认领')
+  A.ok(!h.files.has('新/.P2.pdf.annot.json'), '没批注的新位置不该落文件')
+  A.deepEqual([...h.files.keys()].sort(), ['.Q.pdf.annot.json', '旧/.P.pdf.annot.json'], '多写了别的文件')
+})
+await t('旧宿主(读不出来也回 null):照常记下位置、不提示', async () => {
+  const h = seenHost(async () => null)
+  const S = await load('src/store.ts')
+  const d = await S.acquire('R.pdf', 'fp-r'); d.add(A1); await d.flush(); await settle()
+  A.equal(h.saves.at(-1)?.seen?.['fp-r'], '.R.pdf.annot.json', JSON.stringify(h.saves))
+  A.equal(h.notices.length, 0, JSON.stringify(h.notices))
+})
+await t('位置记录还没读回来时同时开两份 PDF:读回来之后存下原来的 + 两份新的', async () => {
+  let release
+  const gate = new Promise((r) => { release = r })
+  const stored = { seen: { 'fp-old': '老/.old.pdf.annot.json' } }
+  const h = seenHost(() => gate.then(() => JSON.parse(JSON.stringify(stored)))) // 真宿主每次读都是新解析的一份
+  for (const n of ['X', 'Y']) h.files.set(`.${n}.pdf.annot.json`, enc.encode(JSON.stringify({ version: 1, fingerprint: `fp-${n}`, annots: [], ink: {}, note: 'n.md' })))
+  const S = await load('src/store.ts')
+  await Promise.all([S.acquire('X.pdf', 'fp-X'), S.acquire('Y.pdf', 'fp-Y')]); await settle()
+  A.equal(h.saves.length, 0, '读回来之前就写了')
+  release(); await settle()
+  A.deepEqual(h.saves.at(-1)?.seen, { 'fp-old': '老/.old.pdf.annot.json', 'fp-X': '.X.pdf.annot.json', 'fp-Y': '.Y.pdf.annot.json' }, JSON.stringify(h.saves))
 })
 
 // ── 5. 目录(书签 → 目录页 → 字号;假文档,一行 = [字, x, y, 字号]) ──

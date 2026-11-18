@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.1.13 — 2026-11-18
+
+- 插件自己存的 PDF 位置记录(PDF 改名、挪动之后靠它把批注认回来)读不出来时(文件读出错、是空的、写到一半或被手改坏),改名后认回批注先停用、提示一次,这份记录也不再保存:以前会按空记录接着用,下一次保存就把原来攒的整份记录盖掉。批注本身照常保存;没存过时照旧从空记录开始。需要 2.14.2 之后的 Forsion 桌面版(更早的版本读不出来时仍当没存过)。
+- 两份 PDF 在位置记录读回来之前同时打开时,以前各读一份、后存的那份会把先记下的一条丢掉;现在只读一次,两条都留着。
+- When the saved PDF location records (what lets annotations follow a PDF you rename or move) can't be read (a read error, an empty file, a write cut off halfway, or a hand edit that broke it), matching renamed PDFs is paused, you're told once, and the records are no longer saved. Before, the plugin carried on with empty records and the next save overwrote everything it had built up. Annotations themselves still save as usual, and with nothing saved yet it still starts from empty records. Needs a Forsion desktop build newer than 2.14.2 (earlier builds still treat unreadable data as never saved).
+- Two PDFs opened at once before the location records had loaded used to read them separately, and the later save dropped the other PDF's entry. They are now read once and both entries are kept.
+
 ## 0.1.12 — 2026-11-16
 
 - 手写更跟手:写字时不再每一帧都收数据、右栏不再每笔重画小图;笔迹多的文档里每写完一笔不会再顿一下。
