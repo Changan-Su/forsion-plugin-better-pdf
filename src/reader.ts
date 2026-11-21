@@ -239,7 +239,7 @@ export class Reader {
     this.pendingPosition = readReadingPosition(this.positionKey)
     // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
     // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
-    this.root = el(`<div class="pr-root">
+    this.root = el(`<div class="pr-root" data-tool="select">
       <div class="pr-body">
         <div class="pr-side ui-popover" hidden><div class="pr-sidetabs"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
