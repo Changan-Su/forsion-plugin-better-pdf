@@ -3,6 +3,7 @@ import { KIND_ICON, chat, esc, fmtTime, getActive, onActive, richNotes, tocHtml,
 import { buildOutline } from './outline'
 import { baseOf } from './store'
 import { icon } from './icons'
+import { isShape, shapeColor, shapeNote } from './shape'
 import { locale, t } from './i18n'
 
 /** 当前 PDF 换了、或它有变化(批注 / 选中 / 翻页)时调 draw。返回卸载函数。 */
@@ -21,6 +22,8 @@ function follow(draw: (r: Reader | null) => void): () => void {
 }
 
 const empty = (text: string): string => `<div class="pr-panel-empty">${esc(text)}</div>`
+
+const SHAPE_ICON: Record<string, string> = { rectangle: 'square', ellipse: 'circle', arrow: 'move-up-right', line: 'minus' }
 
 export function mountAnnots(host: HTMLElement): () => void {
   host.innerHTML = '<div class="pr-panel"><div class="pr-listhead"><b></b><input class="pr-listfilter" type="search"></div><div class="pr-list"></div></div>'
@@ -46,7 +49,10 @@ export function mountAnnots(host: HTMLElement): () => void {
   const draw = (r: Reader | null): void => {
     const doc = r?.doc
     // 翻页也会走到这里;内容没变就不重画(重画会打断正在进行的滚动和悬停)。
-    const key = JSON.stringify([r?.pdfPath, !!doc, r?.selected, filter, locale(), doc?.data.annots.map((a) => a.modified), doc && Object.entries(doc.data.ink).map(([p, l]) => [p, l.length > 0, r?.ink?.thumbRev?.(Number(p)) ?? 0])])
+    const shapeSelection = r?.ink?.selectedShapes().map(e => e.id) ?? []
+    const pages = Object.entries(doc?.data.ink ?? {})
+    const shapes = pages.flatMap(([page, elements]) => elements.filter(isShape).map(element => ({ page: Number(page), element })))
+    const key = JSON.stringify([shapeSelection, shapes.map(({page, element}) => [page, element.id, shapeColor(element), shapeNote(element)]), r?.pdfPath, !!doc, r?.selected, filter, locale(), doc?.data.annots.map((a) => a.modified), doc && Object.entries(doc.data.ink).map(([p, l]) => [p, l.length > 0, r?.ink?.thumbRev?.(Number(p)) ?? 0])])
     if (key === last) return
     last = key
     input.placeholder = t('list.filter')
@@ -63,21 +69,33 @@ export function mountAnnots(host: HTMLElement): () => void {
         ${a.text ? `<span class="${a.type === 'text' ? 'pr-cmt' : 'pr-quote'}">${esc(a.text)}</span>` : ''}${a.comment ? (rich ? `<span data-md="${a.id}"></span>` : `<span class="pr-cmt">${esc(a.comment)}</span>`) : ''}
         ${a.tags?.length ? `<span class="pr-tags">${a.tags.map((g) => `<span>#${esc(g)}</span>`).join('')}</span>` : ''}</div>` })
     }
+    for (const { page, element } of shapes) {
+      const note = shapeNote(element)
+      const name = t(`shape.${element.type}`)
+      if (!match(name, note)) continue
+      const id = esc(String(element.id))
+      const md = `shape:${element.id}`
+      if (rich && note) comments.set(md, note)
+      items.push({ page, html: `<div class="pr-item${shapeSelection.includes(element.id) ? ' sel' : ''}" role="button" tabindex="0" data-shape-id="${id}" style="--c:${shapeColor(element)}">
+        <span class="pr-item-top"><span class="pr-kind">${icon(SHAPE_ICON[element.type], 11)}</span><span>${esc(name)} · ${esc(t('card.page', { n: page + 1 }))}</span></span>
+        ${note ? (rich ? `<span data-md="${esc(md)}"></span>` : `<span class="pr-cmt">${esc(note)}</span>`) : ''}</div>` })
+    }
     let inkPages = 0
-    for (const [p, els] of Object.entries(doc.data.ink)) {
-      if (!els.length) continue
+    for (const [p, els] of pages) {
+      if (!els.some(element => !isShape(element))) continue
       inkPages++
       if (filter) continue
       items.push({ page: Number(p), html: `<div class="pr-item" role="button" tabindex="0" data-page="${Number(p) + 1}" style="--c:#2b4acb">
         <span class="pr-item-top"><span class="pr-kind">${icon(KIND_ICON.ink, 11)}</span><span>${esc(t('kind.ink'))} · ${esc(t('card.page', { n: Number(p) + 1 }))}</span></span>
         <span class="pr-inkthumb">${r.ink?.thumb(Number(p)) ?? ''}</span></div>` })
     }
-    count.textContent = t('list.count', { n: doc.data.annots.length + inkPages })
+    count.textContent = t('list.count', { n: doc.data.annots.length + inkPages + shapes.length })
     items.sort((a, b) => a.page - b.page)
     list.innerHTML = items.length ? items.map((i) => i.html).join('') : empty(t(filter ? 'list.noMatch' : 'list.empty'))
     keepMds(comments)
-    if (r.selected !== lastSel) list.querySelector('.pr-item.sel')?.scrollIntoView({ block: 'nearest' })
-    lastSel = r.selected
+    const selection = r.selected ?? (shapeSelection.length ? shapeSelection.join(',') : null)
+    if (selection !== lastSel) list.querySelector('.pr-item.sel')?.scrollIntoView({ block: 'nearest' })
+    lastSel = selection
   }
 
   input.addEventListener('input', () => { filter = input.value.trim().toLowerCase(); draw(getActive()) })
@@ -87,6 +105,7 @@ export function mountAnnots(host: HTMLElement): () => void {
     const b = tg.closest<HTMLElement>('.pr-item'), r = getActive()
     if (!b || !r) return
     if (b.dataset.id) r.reveal(b.dataset.id)
+    else if (b.dataset.shapeId) r.revealShape(b.dataset.shapeId)
     else if (b.dataset.page) r.viewer.currentPageNumber = Number(b.dataset.page)
   }
   list.addEventListener('click', open)

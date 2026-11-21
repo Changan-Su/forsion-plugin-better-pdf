@@ -169,6 +169,53 @@ await t('两个窗口各开同一份 PDF:各写各的不互相盖,删掉的也�
   b.patch(b.data.annots[0].id, { comment: '改' }); await b.flush()
   A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text), ['乙'], '甲删掉的被乙带回来了')
 })
+await t('两个窗口同时改图形备注和样式，保留两边的修改', async () => {
+  for (const noteWritesLast of [true, false]) {
+    const { files } = fakeHost()
+    const filename = '.Shape.pdf.annot.json'
+    const shape = { id: 'rectangle-1', type: 'rectangle', version: 1, x: 40, y: 80, strokeColor: '#e03131' }
+    files.set(filename, enc.encode(JSON.stringify({ version: 1, fingerprint: 'shape', annots: [], ink: { 0: [shape] } })))
+    const W1 = await load('src/store.ts'), W2 = await load('src/store.ts')
+    const note = await W1.acquire('Shape.pdf', 'shape'), style = await W2.acquire('Shape.pdf', 'shape')
+    note.data.ink[0] = [{ ...shape, version: 2, versionNonce: 1, customData: { betterPdfNote: 'Calibration' } }]
+    style.data.ink = { 1: [{ ...shape, version: 2, versionNonce: 2, x: 50, strokeColor: '#2b4acb' }] }
+    const writers = noteWritesLast ? [style, note] : [note, style]
+    for (const doc of writers) { doc.changed('ink'); await doc.flush() }
+    const ink = saved(files, filename).ink
+    A.equal(ink[0], undefined)
+    A.equal(ink[1][0].strokeColor, '#2b4acb')
+    A.equal(ink[1][0].customData.betterPdfNote, 'Calibration')
+  }
+})
+await t('Web Locks 让同一份批注的并发写入逐次读取并合并', async () => {
+  const { files } = fakeHost()
+  const filename = '.Concurrent.pdf.annot.json'
+  const element = { id: 's1', type: 'ellipse', version: 1, x: 10, y: 10, strokeColor: '#e03131' }
+  files.set(filename, enc.encode(JSON.stringify({ version: 1, fingerprint: 'concurrent', annots: [], ink: { 0: [element] } })))
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const queue = new Map()
+  const locks = { request(name, run) {
+    const next = (queue.get(name) ?? Promise.resolve()).then(run)
+    queue.set(name, next)
+    return next
+  } }
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks } })
+  try {
+    const W1 = await load('src/store.ts'), W2 = await load('src/store.ts')
+    const a = await W1.acquire('Concurrent.pdf', 'concurrent'), b = await W2.acquire('Concurrent.pdf', 'concurrent')
+    a.data.ink[0][0] = { ...element, version: 2, versionNonce: 1, customData: { betterPdfNote: 'Keep the note' } }
+    b.data.ink[0][0] = { ...element, version: 2, versionNonce: 2, strokeColor: '#2b4acb' }
+    a.changed('shape-note'); b.changed('ink')
+    await Promise.all([a.flush(), b.flush()])
+    const shape = saved(files, filename).ink[0][0]
+    A.equal(queue.size, 1)
+    A.equal(shape.strokeColor, '#2b4acb')
+    A.equal(shape.customData.betterPdfNote, 'Keep the note')
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor)
+    else delete globalThis.navigator
+  }
+})
 await t('读不出来的旧文件又没能另存:整份只读,原件一个字节不动', async () => {
   const host = fakeHost()
   host.files.set('.G.pdf.annot.json', enc.encode('{ 坏'))

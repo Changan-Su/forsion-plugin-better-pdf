@@ -1,6 +1,9 @@
 // 批注的存取:每份 PDF 一个旁挂文件,和 PDF 放在同一个文件夹(点开头,文件树里不显示),PDF 本身一个字节不动。
 // 坐标一律存 PDF 用户空间(pt,y 向上),所以缩放、换设备都对得上;手写按页存白板元素原样(页内 pt,y 向下)。
 import { t } from './i18n'
+import { isShape, shapeNote, withShapeNote } from './shape'
+
+type ChangeKind = 'ink' | 'shape-note'
 
 export type AnnotType = 'highlight' | 'underline' | 'strike' | 'note' | 'text' | 'area'
 
@@ -60,12 +63,12 @@ function parse(text: string): Partial<Sidecar> | null {
 
 /** 三方合并一组带 id 的条目:base = 上次盘上那份,ours = 内存里的,theirs = 盘上现在的(别的窗口写的)。
  *  两边各自新加的都留;一边删了另一边没动的 → 删;两边都改了同一条 → 留我们的。 */
-function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string): T[] {
+function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string, combine?: (base: T, ours: T, theirs: T) => T): T[] {
   const b = new Map(base.map((x) => [id(x), x])), o = new Set(ours.map(id)), th = new Map(theirs.map((x) => [id(x), x]))
   const out: T[] = []
   for (const x of ours) {
     const bx = b.get(id(x)), tx = th.get(id(x)), mine = !bx || stamp(bx) !== stamp(x) // 我们新加的 / 改过的
-    if (tx) out.push(mine ? x : tx)
+    if (tx) out.push(mine ? (combine && bx && stamp(bx) !== stamp(tx) ? combine(bx, x, tx) : x) : tx)
     else if (mine) out.push(x)
   }
   for (const x of theirs) if (!o.has(id(x)) && !b.has(id(x))) out.push(x)
@@ -73,9 +76,29 @@ function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stam
 }
 type Ink = { page: string; el: any }
 const inkList = (ink: Record<string, any[]> | undefined): Ink[] => Object.entries(ink ?? {}).flatMap(([page, els]) => (Array.isArray(els) ? els : []).map((el) => ({ page, el })))
+/** A note edit and a simultaneous move/style edit can both survive. */
+function mergeInk(base: Ink, ours: Ink, theirs: Ink): Ink {
+  if (!isShape(base.el) || !isShape(ours.el) || !isShape(theirs.el)) return ours
+  const original = shapeNote(base.el), mine = shapeNote(ours.el), other = shapeNote(theirs.el)
+  if (mine === other) return ours
+  const style = (item: Ink): string => {
+    const { version, versionNonce, updated, ...element } = withShapeNote(item.el, '')
+    if (element.customData && Object.values(element.customData).every(value => value === undefined)) delete element.customData
+    return JSON.stringify([item.page, element])
+  }
+  const geometry = mine !== original && style(base) === style(ours) ? theirs : ours
+  const note = mine === original ? other : mine
+  if (shapeNote(geometry.el) === note) return geometry
+  return { page: geometry.page, el: {
+    ...withShapeNote(geometry.el, note),
+    version: Math.max(ours.el.version ?? 0, theirs.el.version ?? 0) + 1,
+    versionNonce: crypto.getRandomValues(new Uint32Array(1))[0] >>> 1,
+    updated: Date.now(),
+  } }
+}
 function mergeSidecar(base: Partial<Sidecar> | null, ours: Sidecar, theirs: Partial<Sidecar>): Sidecar {
   const ink: Record<string, any[]> = {}
-  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.x}:${x.el?.y}`)) (ink[page] ??= []).push(el)
+  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.versionNonce}:${x.el?.x}:${x.el?.y}`, mergeInk)) (ink[page] ??= []).push(el)
   return {
     version: VERSION, fingerprint: ours.fingerprint, note: ours.note ?? theirs.note, ink,
     annots: merge3(base?.annots ?? [], ours.annots, theirs.annots ?? [], (a) => a.id, (a) => a.modified),
@@ -120,7 +143,7 @@ export class AnnotDoc {
   /** 内存里有还没写到盘上的改动。写成功才清;写失败留着,下次 flush(含关标签时)再试。 */
   dirty = false
   /** what = 'ink':只有笔迹变了(页面上的高亮、便签不用重画)。不给 = 什么都可能变了。 */
-  private subs = new Set<(what?: 'ink') => void>()
+  private subs = new Set<(what?: ChangeKind) => void>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private writing: Promise<void> = Promise.resolve()
   /** 盘上那份的原文(上次读到 / 写下的);null = 盘上没有。 */
@@ -170,13 +193,13 @@ export class AnnotDoc {
     }
   }
 
-  subscribe(cb: (what?: 'ink') => void): () => void {
+  subscribe(cb: (what?: ChangeKind) => void): () => void {
     this.subs.add(cb)
     return () => { this.subs.delete(cb) }
   }
 
   /** 改完 data 之后调:通知界面重画,并安排落盘。what = 'ink':只动了笔迹。 */
-  changed(what?: 'ink'): void {
+  changed(what?: ChangeKind): void {
     for (const cb of [...this.subs]) cb(what)
     if (this.readonly) return
     this.dirty = true
@@ -187,8 +210,22 @@ export class AnnotDoc {
   /** 立刻落盘(关标签时也调)。写入排队,不并发。 */
   flush(): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
-    if (this.dirty && !this.readonly) this.writing = this.writing.then(() => this.write())
+    if (this.dirty && !this.readonly) this.writing = this.writing.then(() => this.writeWithLock())
     return this.writing
+  }
+
+  private async writeWithLock(): Promise<void> {
+    try {
+      const locks = globalThis.navigator?.locks
+      if (locks) {
+        const root = this.io ? 'external' : ctx.app.vaultRoot?.() ?? 'vault'
+        await locks.request(JSON.stringify(['better-pdf-sidecar', root, this.path]), () => this.write())
+        return
+      }
+    } catch {
+      // Older and embedded hosts can deny Web Locks. Keep the read-before-write fallback.
+    }
+    await this.write()
   }
 
   private async write(): Promise<void> {

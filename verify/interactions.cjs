@@ -10,10 +10,12 @@
 // 宿主有共用划线条(ctx.ui.mountSelectionBar,2.13.3 之后)时选区走宿主的条,并多跑 ②h 那几项;没有时走插件自己的浮条 .pr-selpop。
 // 两种宿主各跑一遍,旧的那条路才算没坏。
 const fs = require('fs'); const os = require('os'); const path = require('path')
+const { PDFDocument, PDFName, PDFArray, PDFDict } = require('pdf-lib')
 const HERE = path.resolve(__dirname, '..')
 const DESK = process.env.GENESIS_DESKTOP || path.resolve(HERE, '../../Forsion-Genesis/desktop')
 const electron = require(path.join(DESK, 'scripts/lib/launch-electron.cjs'))
 const { chromium } = require(path.join(DESK, 'node_modules/playwright-core'))
+const { findChromium } = require(path.join(DESK, 'scripts/lib/find-chromium.cjs'))
 const { startStubEngine } = require(path.join(DESK, 'scripts/lib/stub-engine.cjs')) // 假后端:让右栏的对话接得上(不跑模型)
 const SHOTS = process.env.PDF_INTERACTIONS_OUT || path.join(HERE, '.shots', 'interactions'); fs.mkdirSync(SHOTS, { recursive: true })
 // 宿主有共用的划线条(ctx.ui.mountSelectionBar)时,选区浮出的是它;没有(2.13.3 及更早)时是插件自己的浮条 .pr-selpop。
@@ -75,7 +77,7 @@ async function makePaper(file) {
     <h3>3.2 Conditions</h3><table style="border-collapse: collapse; margin: 8px 0" border="1" cellpadding="6"><tr><th>Condition</th><th>Tool</th><th>Readers</th><th>Recall (%)</th></tr><tr><td>Highlight only</td><td>Marker</td><td>16</td><td>41</td></tr><tr><td>Typed notes</td><td>Comment card</td><td>16</td><td>63</td></tr><tr><td>Handwriting</td><td>Pen</td><td>16</td><td>55</td></tr></table>${body(2, 4)}
     ${sec('4. Results', 5, 2)}${sec('5. Discussion', 5, 5)}${sec('6. Limitations', 2, 1)}
     <h2>References</h2><ol><li>Margin, C. (2019). The address of a note. <i>Journal of Reading Tools</i>, 12(3), 45–61.</li><li>Writer, B. (2021). Colour schemes that readers invent. <i>Notes &amp; Queries in HCI</i>, 7, 101–118.</li><li>Reader, A. (2023). Why the second visit is expensive. <i>Reading Studies Quarterly</i>, 30(1), 1–19.</li></ol></body></html>`
-  const b = await chromium.launch()
+  const b = await chromium.launch({ executablePath: findChromium() })
   try {
     const p = await b.newPage()
     await p.setContent(html)
@@ -89,7 +91,7 @@ async function makePdf(file) {
     <h1>Reading Fixture</h1>${para(S1)}${para(S2)}${para(S3)}${SELECTION ? '<p style="margin-top:130px">Formula start: where the <i>n</i>! and <i>m</i>! factors give <i>x</i><sup>n</sup><i>y</i><sup>m</sup>.</p>' : ''}
     <h1 style="page-break-before: always">Methods</h1>${para(S4)}${para('Each read the same nine-page document.')}
     <h1 style="page-break-before: always">Results</h1>${para('Delayed recall was highest for readers who revisited their notes.')}</body></html>`
-  const b = await chromium.launch()
+  const b = await chromium.launch({ executablePath: findChromium() })
   try {
     const p = await b.newPage()
     await p.setContent(html)
@@ -166,6 +168,12 @@ async function main() {
   const tool = async () => win.locator('.pr-root').getAttribute('data-tool')
   const button = value => win.locator(`.pr-toolbar [data-act="tool"][data-v="${value}"]`)
   const shapes = () => ink().filter(e => e.type === 'rectangle')
+  const action = key => win.locator('.pr-shape-bar [data-shape-action="' + key + '"]')
+  const style = value => win.locator('.pr-shape-panel [data-shape-action="corners"][data-v="' + value + '"]')
+  const tint = color => win.locator('.pr-shape-panel [data-act="shape-ink-color"][data-v="' + color + '"]')
+  const noteEditor = () => win.locator('.pr-shape-card textarea, .pr-shape-card [contenteditable="true"]').first()
+  const shapeNote = 'Check calibration before averaging.'
+  const blue = '#2b4acb'
   const draw = async (offset = 0) => {
     const page = await win.locator('.pr-root .page').first().boundingBox()
     const x = page.x + page.width * .3 + offset, y = Math.max(page.y + 255, 330) + offset
@@ -206,15 +214,110 @@ async function main() {
     await until(() => shapes().length === 2)
     record('round mode affects the new rectangle without rewriting existing sharp rectangle', shapes().length === 2 && !shapes()[0].roundness && !!shapes()[1].roundness)
     await button('select').click(); await win.mouse.click(second.x + 50, second.y); await win.waitForTimeout(250)
-    await win.locator('.pr-toolbar [data-act="roundness"][data-v="sharp"]').click(); await until(() => shapes().every(e => !e.roundness))
+    await action('more').click(); await style('sharp').click(); await until(() => shapes().every(e => !e.roundness))
     record('selected old rectangle can be changed to sharp independently', shapes().length === 2 && shapes().every(e => !e.roundness))
     await win.keyboard.press('ControlOrMeta+z'); await until(() => !!shapes()[1]?.roundness)
     record('Undo reverts only the corner edit, not rectangle creation', shapes().length === 2 && !!shapes()[1].roundness && !shapes()[0].roundness)
     await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => shapes().every(e => !e.roundness))
     record('Redo reapplies the corner edit without changing other geometry', shapes().length === 2 && shapes().every(e => !e.roundness))
-    await win.locator('.pr-toolbar [data-act="roundness"][data-v="round"]').click(); await until(() => !!shapes()[1]?.roundness)
+    await action('more').click(); await style('round').click(); await until(() => !!shapes()[1]?.roundness)
     await win.screenshot({ path: path.join(SHOTS, 'corners.png') })
     record('editing old corner style preserves its other rectangle and annotations', !shapes()[0].roundness && !!shapes()[1].roundness && read().annots.length === 4)
+    await action('color').click()
+    await tint(blue).waitFor({ state: 'visible' })
+    await win.waitForTimeout(220)
+    await win.screenshot({ path: path.join(SHOTS, 'shape-color.png') })
+    await tint(blue).click(); await until(() => shapes()[1]?.strokeColor === blue)
+    record('shape color changes only the picked rectangle', shapes()[0].strokeColor !== blue && shapes()[1].strokeColor === blue)
+    await win.keyboard.press('ControlOrMeta+z'); await until(() => shapes()[1]?.strokeColor !== blue)
+    record('undo restores the previous shape color', shapes()[1]?.strokeColor === shapes()[0]?.strokeColor)
+    await win.keyboard.press('ControlOrMeta+Shift+z'); await until(() => shapes()[1]?.strokeColor === blue)
+    record('redo reapplies the selected shape color', shapes()[1]?.strokeColor === blue)
+    await action('note').click()
+    await noteEditor().pressSequentially(shapeNote)
+    await until(() => shapes()[1]?.customData?.betterPdfNote === shapeNote)
+    record('shape note autosaves against the picked element ID', shapes()[1]?.customData?.betterPdfNote === shapeNote && !shapes()[0]?.customData?.betterPdfNote)
+    await win.screenshot({ path: path.join(SHOTS, 'shape-note.png') })
+    await win.keyboard.press('Escape')
+    await noteEditor().waitFor({ state: 'hidden' })
+    record('Escape closes the note and leaves the selected shape actions visible', await action('note').isVisible())
+    await win.keyboard.press('Escape')
+    await action('note').waitFor({ state: 'hidden' })
+    record('second Escape clears the shape selection', !await action('note').isVisible())
+    await win.locator('.pr-shape-pin').click()
+    record('the note marker reopens the saved comment', (await noteEditor().textContent()).includes(shapeNote))
+    await win.keyboard.press('Escape')
+    await action('more').click()
+    await win.locator('.pr-shape-panel [data-shape-action="delete"]').click()
+    await until(() => shapes().length === 1)
+    record('delete removes the picked shape and its marker only', shapes().length === 1 && await win.locator('.pr-shape-pin').count() === 0)
+    await win.keyboard.press('ControlOrMeta+z')
+    await until(() => shapes().length === 2)
+    record('undo delete brings back the original shape and note', shapes()[1]?.customData?.betterPdfNote === shapeNote && await win.locator('.pr-shape-pin').count() === 1)
+    await win.mouse.move(first.x + 50, first.y); await win.mouse.click(first.x + 50, first.y)
+    await win.keyboard.down('Shift')
+    await win.mouse.move(second.x + 50, second.y); await win.mouse.click(second.x + 50, second.y)
+    await win.keyboard.up('Shift')
+    await action('color').click(); await tint('#2f9e44').click()
+    await until(() => shapes().every(e => e.strokeColor === '#2f9e44'))
+    record('multi-select recolors both shapes and offers no shared note', shapes().every(e => e.strokeColor === '#2f9e44') && !await action('note').isVisible())
+    await win.keyboard.press('ControlOrMeta+z'); await until(() => shapes()[1]?.strokeColor === blue)
+    record('one undo restores both original strokes and preserves the note', shapes()[0].strokeColor !== blue && shapes()[1].strokeColor === blue && shapes()[1].customData?.betterPdfNote === shapeNote)
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(150)
+    const beforeMove = shapes()[1]
+    const shapePoint = await win.locator('.pr-shape-pin').evaluate((pin, width) => {
+      const page = pin.closest('.page').getBoundingClientRect(), zoom = page.width / 612
+      return {
+        x: page.left + (Number(pin.style.getPropertyValue('--x')) - width / 2) * zoom,
+        y: page.top + Number(pin.style.getPropertyValue('--y')) * zoom,
+      }
+    }, beforeMove.width)
+    await win.mouse.move(shapePoint.x, shapePoint.y, { steps: 3 })
+    await win.waitForTimeout(140)
+    await win.mouse.down()
+    await win.mouse.move(shapePoint.x + 35, shapePoint.y + 24, { steps: 8 })
+    record('floating actions tuck away during direct manipulation', !await action('note').isVisible())
+    await win.mouse.up()
+    await until(() => shapes()[1]?.x !== beforeMove.x)
+    await action('note').waitFor({ state: 'visible', timeout: 3500 })
+    record('moving the shape keeps its note and restores contextual actions', shapes()[1].x !== beforeMove.x && shapes()[1].customData?.betterPdfNote === shapeNote && await action('note').isVisible(), { from: beforeMove.x, to: shapes()[1].x, note: shapes()[1].customData?.betterPdfNote, types: ink().map(e => e.type) })
+    await win.keyboard.press('ControlOrMeta+z'); await until(() => shapes()[1]?.x === beforeMove.x)
+    record('undo move keeps the shape note', shapes()[1].x === beforeMove.x && shapes()[1].customData?.betterPdfNote === shapeNote)
+    const firstWidth = shapes()[0].strokeWidth, secondWidth = shapes()[1].strokeWidth
+    await action('more').click()
+    await win.locator('.pr-shape-panel [data-shape-action="width"][data-v="8"]').click()
+    await until(() => shapes()[1]?.strokeWidth === 8)
+    record('width changes only the current shape', shapes()[0].strokeWidth === firstWidth && shapes()[1].strokeWidth === 8)
+    await win.keyboard.press('ControlOrMeta+z'); await until(() => shapes()[1]?.strokeWidth === secondWidth)
+    record('undo restores the previous width', shapes()[1].strokeWidth === secondWidth)
+    const reader = win.locator('.pr-root')
+    await reader.evaluate(e => Object.assign(e.style, { width: '382px', position: 'relative', overflow: 'hidden' }))
+    await win.locator('.pr-root[data-w="dock"]').waitFor()
+    await win.locator('.pr-shape-pin').click()
+    const [sheet, dock] = await Promise.all([win.locator('.pr-shape-panel[data-kind="note"]').boundingBox(), win.locator('.pr-tools').boundingBox()])
+    record('narrow pane docks the note above the tools', !!sheet && !!dock && sheet.y + sheet.height < dock.y && sheet.width <= 382)
+    await win.waitForTimeout(240)
+    await win.screenshot({ path: path.join(SHOTS, 'shape-narrow.png') })
+    await win.keyboard.press('Escape')
+    await win.keyboard.press('Escape')
+    await action('note').waitFor({ state: 'hidden' })
+    const touchAt = await win.locator('.pr-shape-pin').evaluate((pin, width) => {
+      const box = pin.closest('.page').getBoundingClientRect()
+      const zoom = box.width / 612
+      return {
+        x: box.left + (Number(pin.style.getPropertyValue('--x')) - width / 2) * zoom,
+        y: box.top + Number(pin.style.getPropertyValue('--y')) * zoom,
+      }
+    }, shapes()[1].width)
+    const cdp = await win.context().newCDPSession(win)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(touchAt.x), y: Math.round(touchAt.y) }] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await cdp.detach()
+    await action('note').waitFor({ state: 'visible', timeout: 3000 })
+    record('a touch tap selects the existing shape and shows the docked actions', await action('note').isVisible())
+    await reader.evaluate(e => e.removeAttribute('style'))
+    await win.locator('.pr-root:not([data-w])').waitFor()
     // A touch hold opens the explicit menu; cancellation does not draw anything.
     const hold = button('underline'); await hold.dispatchEvent('pointerdown', { pointerId: 80, pointerType: 'touch', button: 0 }); await win.waitForTimeout(600); await hold.dispatchEvent('pointerup', { pointerId: 80, pointerType: 'touch', button: 0 })
     record('touch hold exposes explicit use-once/keep-tool menu', await win.locator('.ctx-menu button').filter({ hasText: '保持工具' }).count() === 1)
@@ -230,7 +333,26 @@ async function main() {
     await win.keyboard.press('Escape'); await app.close(); app = null
     const stored = read(); await boot()
     record('save/reopen preserves sharp and round rectangles plus all text annotations', JSON.stringify(read()) === JSON.stringify(stored) && shapes().length === 2 && !shapes()[0].roundness && !!shapes()[1].roundness)
+    if (!await win.locator('.pr-panel .pr-listfilter').isVisible()) await win.locator('.pr-toolbar [data-act="panel"]').click()
+    const filter = win.locator('.pr-panel .pr-listfilter')
+    await filter.fill('calibration')
+    const hit = win.locator('.pr-panel [data-shape-id]')
+    record('reopened notes are searchable in the existing annotations panel', await hit.count() === 1 && (await hit.textContent()).includes(shapeNote))
+    await hit.click()
+    await action('note').waitFor({ state: 'visible' })
+    record('sidebar result locates the original shape', await action('note').isVisible())
+    const zoom = win.locator('.pr-zoomsel')
+    const scroller = win.locator('.pr-container')
+    await zoom.selectOption('3')
+    await scroller.evaluate(e => { e.scrollLeft = 0; e.scrollTop = 0 })
+    await hit.click()
+    await action('note').waitFor({ state: 'visible' })
+    record('sidebar can find the shape when zoom requires horizontal scrolling', await scroller.evaluate(e => e.scrollLeft > 0))
+    await zoom.selectOption('page-width')
+    await filter.fill('')
     await button('select').click()
+    await scroller.evaluate(e => { e.scrollTop = 0; e.scrollLeft = 0 })
+    await win.waitForTimeout(250)
     const beforeColors = read().annots.map(a => ({ id: a.id, color: a.color })), cardAt = await sentenceBox(win, S1)
     await win.mouse.click((cardAt.left + cardAt.right) / 2, cardAt.y0); await win.locator('.pr-card').waitFor({ state: 'visible', timeout: 5000 })
     await win.locator('.pr-card [data-pop="color-menu"]').click(); await win.locator('.pr-card .pr-dot[data-v="#a28ae5"]').click()
@@ -245,9 +367,23 @@ async function main() {
     await until(() => exports().length === 1, 10000)
     const out = exports()[0], bytes = out ? fs.readFileSync(path.join(vault, FOLDER, out)) : Buffer.alloc(0)
     record('export saves a separate annotated PDF and leaves original unchanged', !!out && bytes.length > original.length && Buffer.compare(original, fs.readFileSync(path.join(vault, FOLDER, PDF))) === 0)
+    if (bytes.length) {
+      const exported = await PDFDocument.load(bytes)
+      const refs = exported.getPage(0).node.lookupMaybe(PDFName.of('Annots'), PDFArray)
+      const notes = refs?.asArray().map(ref => exported.context.lookup(ref, PDFDict))
+      record('exported PDF contains the shape note as a positioned PDF comment', !!notes?.some(note =>
+        note.get(PDFName.of('Subtype'))?.toString() === '/Text' &&
+        note.get(PDFName.of('Contents'))?.decodeText() === shapeNote &&
+        note.get(PDFName.of('Rect'))?.size() === 4))
+    }
     await win.screenshot({ path: path.join(SHOTS, 'after-reopen.png') })
     await win.evaluate(() => localStorage.setItem('forsion_theme_pref', 'dark')); await app.close(); app = null; await boot(); await win.waitForTimeout(600)
     await win.screenshot({ path: path.join(SHOTS, 'dark.png') })
+    await win.locator('.pr-shape-pin').click()
+    await noteEditor().waitFor({ state: 'visible' })
+    await win.waitForTimeout(240)
+    await win.screenshot({ path: path.join(SHOTS, 'shape-dark.png') })
+    await win.keyboard.press('Escape')
     await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme_skin', 'sage'); localStorage.setItem('forsion_theme_bg', 'sage') }); await app.close(); app = null; await boot(); await win.waitForTimeout(600)
     await win.screenshot({ path: path.join(SHOTS, 'sage.png') })
     if (out) {
