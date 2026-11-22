@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.1.14 — 2026-11-22
+
+- 选中矩形、椭圆、箭头或直线后，可以在图形旁改描边颜色、写 Markdown 备注，或从「⋯」调整线宽、矩形圆角和删除。多选可批量改样式，窄分栏里的操作从底部展开。
+- 备注自动保存并跟随图形移动。可从页内气泡打开，也可在右侧批注栏搜索定位。导出带批注的 PDF 时，备注随副本写成 PDF 评论。
+- 这一版也包含下方 0.1.13 的 PDF 位置记录修复。
+
+- Select a rectangle, ellipse, arrow, or line to change its stroke color or add a Markdown note beside it. The More menu includes line width, rectangle corners, and deletion. Style changes support multiple selected shapes, and controls dock at the bottom in narrow panes.
+- Notes save automatically and move with their shapes. Open them from the page marker or search for them in the annotations sidebar. Exported copies include shape notes as PDF comments.
+- This release also includes the PDF location record fixes listed under 0.1.13 below.
+
 ## 0.1.13 — 2026-11-18
 
 - 插件自己存的 PDF 位置记录(PDF 改名、挪动之后靠它把批注认回来)读不出来时(文件读出错、是空的、写到一半或被手改坏),改名后认回批注先停用、提示一次,这份记录也不再保存:以前会按空记录接着用,下一次保存就把原来攒的整份记录盖掉。批注本身照常保存;没存过时照旧从空记录开始。需要 2.14.2 之后的 Forsion(更早的版本读不出来时仍当没存过)。

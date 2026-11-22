@@ -2,12 +2,12 @@
   "id": "pdf-reader",
   "name": "Better PDF",
   "nameEn": "Better PDF",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "apiVersion": 1,
   "minAppVersion": "2.13.0",
   "author": "Forsion",
-  "description": "读文献用的 PDF 阅读器:选中文字就能高亮、划线、写批注、打标签,也可以在页面上放便签、文字,画方框、圆、箭头;批注列表、目录和 Tangu 对话在右栏。手写和形状用的是白板的同一个引擎,画上去的东西可以点选、拖动、缩放、框选(手写、形状、橡皮需要 2.13.1 之后的桌面版本)。批注存在 PDF 旁边的隐藏文件里,PDF 本身不改,需要时可以另存一份带批注的 PDF。装上后点开 PDF 就由它打开;内置的只读阅读器仍在右键菜单里。",
-  "descriptionEn": "A PDF reader for working through papers: select text to highlight, underline, comment and tag; place sticky notes and text on the page; draw boxes, ellipses and arrows. The annotation list, the outline and a Tangu chat sit in the right sidebar. Handwriting and shapes use the same engine as the whiteboard, so anything you draw can be selected, moved, resized and box-selected (handwriting, shapes and the eraser need a desktop version newer than 2.13.1). Annotations are saved in a hidden file next to the PDF and the PDF itself is never modified; export a copy with the annotations whenever you need one. Once installed, PDFs open with it; the built-in read-only viewer stays in the right-click menu.",
+  "description": "读文献用的 PDF 阅读器:选中文字就能高亮、划线、写批注、打标签,也可以在页面上放便签、文字,画方框、圆、箭头;批注列表、目录和 Tangu 对话在右栏。手写和形状用的是白板的同一个引擎,画上去的东西可以点选、拖动、缩放、框选(手写、形状、橡皮需要 2.13.1 之后的桌面版本)。用「选择」点击图形，就能在旁边改描边颜色或写备注。批注存在 PDF 旁边的隐藏文件里,PDF 本身不改,需要时可以另存一份带批注的 PDF。装上后点开 PDF 就由它打开;内置的只读阅读器仍在右键菜单里。",
+  "descriptionEn": "A PDF reader for working through papers: select text to highlight, underline, comment and tag; place sticky notes and text on the page; draw boxes, ellipses and arrows. The annotation list, the outline and a Tangu chat sit in the right sidebar. Handwriting and shapes use the same engine as the whiteboard, so anything you draw can be selected, moved, resized and box-selected (handwriting, shapes and the eraser need a desktop version newer than 2.13.1). Select a shape to change its stroke color or add a note beside it. Annotations are saved in a hidden file next to the PDF and the PDF itself is never modified; export a copy with the annotations whenever you need one. Once installed, PDFs open with it; the built-in read-only viewer stays in the right-click menu.",
   "main": "main.js",
   "onboarding": {
     "intro": "点开库里的任意一份 PDF 就是它。批注跟着 PDF 走,PDF 文件本身不会被改动。",
@@ -18,7 +18,7 @@
       },
       {
         "title": "便签、文字、形状",
-        "description": "工具栏上选好工具,在页面上点一下放便签或文字;「形状」拖出方框、圆、箭头或直线(默认方框,不填充),适合圈图表。形状需要 2.13.1 之后的桌面版本。"
+        "description": "工具栏上选好工具,在页面上点一下放便签或文字;「形状」拖出方框、圆、箭头或直线(默认方框,不填充),适合圈图表。用「选择」点击图形，就能在旁边改描边颜色或写备注。形状需要 2.13.1 之后的桌面版本。"
       },
       {
         "title": "右栏",
@@ -42,7 +42,7 @@
         },
         {
           "title": "Notes, text and shapes",
-          "description": "Pick a tool on the toolbar, then click the page to place a sticky note or text. The shape tool drags out a box, ellipse, arrow or line (a box by default, no fill), handy for marking figures. Shapes need a desktop version newer than 2.13.1."
+          "description": "Pick a tool on the toolbar, then click the page to place a sticky note or text. The shape tool drags out a box, ellipse, arrow or line (a box by default, no fill), handy for marking figures. Select a shape to change its stroke color or add a note beside it. Shapes need a desktop version newer than 2.13.1."
         },
         {
           "title": "Right sidebar",
