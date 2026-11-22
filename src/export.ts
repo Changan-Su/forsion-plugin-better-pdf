@@ -6,6 +6,7 @@ import {
 } from 'pdf-lib'
 import type { Reader } from './reader'
 import { baseOf, dirOf, stemOf, type Annot } from './store'
+import { shapeColor, shapeNote, visualBoundsOf } from './shape'
 import { t } from './i18n'
 
 const SUBTYPE: Record<string, string> = { highlight: 'Highlight', underline: 'Underline', strike: 'StrikeOut' }
@@ -108,6 +109,24 @@ export async function exportAnnotated(r: Reader): Promise<void> {
     const doc = await PDFDocument.load(bytes, { updateMetadata: false })
     const pages = doc.getPageCount()
     for (const a of r.doc.data.annots) if (a.page < pages) writeAnnot(doc, a)
+    for (const [key, elements] of Object.entries(r.doc.data.ink)) {
+      const p = Number(key)
+      if (!Number.isInteger(p) || p < 0 || p >= pages) continue
+      const noted = elements.filter(e => shapeNote(e).trim())
+      if (!noted.length) continue
+      const viewport = (await r.pdf.getPage(p + 1)).getViewport({ scale: 1 })
+      const page = doc.getPage(p)
+      for (const e of noted) {
+        const [, top, right] = visualBoundsOf(e)
+        const x = Math.max(0, Math.min(right + 4, viewport.width - 18))
+        const y = Math.max(0, Math.min(top, viewport.height - 18))
+        const corners = [viewport.convertToPdfPoint(x, y), viewport.convertToPdfPoint(x + 18, y + 18)]
+        const xs = corners.map(point => point[0]), ys = corners.map(point => point[1])
+        const modified = new Date(Number.isFinite(e.updated) ? e.updated : Date.now()).toISOString()
+        addAnnot(doc, page, { type: 'note', id: `shape-${e.id}`, page: p, color: shapeColor(e), created: modified, modified, comment: shapeNote(e) },
+          { Subtype: 'Text', Rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], Name: 'Comment', Open: false })
+      }
+    }
     if (ctx.ui?.boardToSvg) {
       for (const [p, els] of Object.entries(r.doc.data.ink)) {
         if (!els.length || Number(p) >= pages) continue

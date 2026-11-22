@@ -290,3 +290,41 @@
 @media (pointer: coarse) { .pr-color-menu .pr-dot { width: 44px; height: 44px; } }
 
 .pr-mode-placeholder { display: inline-block; width: 32px; height: 32px; margin-left: 3px; flex-shrink: 0; pointer-events: none; }
+
+/* Selection actions stay within their own PDF view, including a narrow dock. */
+.pr-shape-ui {
+  inset: 0; border: 0; background: transparent; box-shadow: none; pointer-events: none;
+}
+.pr-shape-ui .pr-shape-bar, .pr-shape-ui .pr-shape-panel {
+  position: absolute; width: max-content; max-width: calc(100% - 16px); pointer-events: auto;
+}
+.pr-shape-ui[data-panel="note"] .pr-shape-bar { visibility: hidden; }
+.pr-shape-ui .pr-shape-panel { padding: 0; }
+.pr-shape-panel[data-kind="more"] { display: grid; justify-items: start; gap: 5px; padding: 6px; }
+.pr-shape-panel[data-kind="color"] { padding: 3px; }
+.pr-shape-panel[data-kind="color"] .pr-dots { display: flex; flex-wrap: wrap; }
+.pr-shape-style {
+  display: flex; align-items: center; gap: 8px; padding-inline: 6px;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+}
+.pr-shape-ui .pr-shape-card { max-width: 100%; }
+.pr-shape-card .pr-card-top { padding-inline-start: 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.pr-shape-card .pr-card-md { min-height: 74px; padding-block: 8px; }
+.pr-shape-frame { position: absolute; outline: 1px solid var(--accent-ink, var(--accent)); outline-offset: 2px; }
+.pr-shape-ui .pr-mixed-color { background: linear-gradient(135deg, var(--c) 50%, var(--text-muted) 50%); }
+.pr-shape-pin {
+  position: absolute; z-index: 4;
+  left: calc(var(--total-scale-factor) * var(--x) * 1px + 5px);
+  top: calc(var(--total-scale-factor) * var(--y) * 1px - 25px);
+  display: grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--surface)); color: var(--text-muted);
+  box-shadow: var(--btn-shadow); pointer-events: auto; cursor: pointer;
+}
+.pr-root:is(:not([data-tool="select"]), [data-grab]) .pr-shape-pin { pointer-events: none; }
+.pr-shape-pin:hover, .pr-shape-pin:focus-visible { color: var(--text); }
+@media (pointer: coarse) {
+  .pr-shape-bar button, .pr-shape-panel .pr-pbtn, .pr-shape-panel .pr-ibtn { min-width: 44px; min-height: 44px; }
+  .pr-shape-ui .pr-dot { width: 44px; height: 44px; }
+  .pr-shape-ui .pr-width { width: 38px; height: 38px; }
+}

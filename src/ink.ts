@@ -14,6 +14,7 @@ import { esc } from './reader'
 import { t } from './i18n'
 import { validNewShape } from './toolSession'
 import { boundsOf, hits } from './geom'
+import { isShape, shapeNote, withShapeNote, type ShapeStyle, type ShapeEdit, visualBoundsOf } from './shape'
 
 export const inkAvailable = (): boolean => !!(ctx.ui?.mountBoard && ctx.ui?.boardToSvg)
 
@@ -35,7 +36,7 @@ const HIT = 6, FRAME = 14
 const SETTLE = 60
 
 const centerY = (e: any): number => { const b = boundsOf(e); return (b[1] + b[3]) / 2 }
-const sig = (els: any[] | undefined): string => (els ?? []).map((e) => `${e.id}:${e.version}`).join(',')
+const sig = (els: any[] | undefined): string => (els ?? []).map((e) => `${e.id}:${e.version}:${e.versionNonce ?? 0}`).join(',')
 const sigAll = (ink: Record<string, any[]> | undefined): string => Object.keys(ink ?? {}).sort().map((p) => `${p}=${sig(ink![p])}`).join(';')
 
 export class InkLayer {
@@ -69,6 +70,7 @@ export class InkLayer {
   private moved = false
   /** 我们以为引擎选中着的那几个(按自己看到的点选 / 框选记的,接口上问不到引擎)。只用来把它们外框那一圈也让给白板层,让缩放柄够得着。 */
   private readonly picked = new Set<string>()
+  private clearPickTimer: ReturnType<typeof setTimeout> | null = null
   /** 选择工具下点过白板层:引擎那边可能选着东西。 */
   private touched = false
   /** 抬笔就收:不等下面那个 300ms 的攒批(引擎收尾这一笔时再变一次,由攒批补上)。
@@ -147,26 +149,81 @@ export class InkLayer {
     const corners = this.shaping ? this.cornersHtml() + sep : ''
     return `<span class="pr-penrow">${row}</span>` + sep + corners + this.r.dotsHtml(this.pref.color, 'ink-color', INK_COLORS) + sep + widths + sep + history
   }
-  private pickedRectangles(): any[] { return (this.handle?.getScene().elements ?? []).filter(e => this.picked.has(e.id) && e.type === 'rectangle') }
-  hasSelectedRectangle(): boolean { return this.pickedRectangles().length > 0 }
-  private get shownRoundness(): 'sharp' | 'round' { const selected = this.pickedRectangles()[0]; return selected ? (selected.roundness ? 'round' : 'sharp') : this.roundness }
+  private get shownRoundness(): 'sharp' | 'round' { return this.roundness }
   setRoundness(value: 'sharp' | 'round'): void {
-    const roundness = value === 'round' ? 'round' : 'sharp'
-    const ids = new Set(this.pickedRectangles().map(e => e.id))
-    if (ids.size && this.handle) {
-      const after = roundness === 'round' ? { type: 3 } : null
-      const edits = this.pickedRectangles().filter(e => JSON.stringify(e.roundness ?? null) !== JSON.stringify(after)).map(e => ({ id: e.id, before: e.roundness ?? null, after }))
-      this.r.recordCornerEdit(edits)
-      this.applyCorners(edits, 'after')
-    } else this.roundness = roundness
+    this.roundness = value === 'round' ? 'round' : 'sharp'
     this.handle?.update(this.style())
   }
-  applyCorners(edits: { id: string; before: unknown; after: unknown }[], direction: 'before' | 'after'): void {
-    if (!this.handle || !edits.length) return
-    const byId = new Map(edits.map(edit => [edit.id, edit[direction]]))
-    this.replace(this.handle.getScene().elements.map(element => byId.has(element.id) ? { ...element, roundness: byId.get(element.id), version: (element.version ?? 0) + 1, updated: Date.now() } : element))
-    this.refreshStatic(); this.r.renderToolbar()
+
+  selectedShapes(): any[] {
+    return (this.handle?.getScene().elements ?? []).filter(e => this.picked.has(e.id) && isShape(e))
   }
+
+  editShapes(style: ShapeStyle, elements = this.selectedShapes()): void {
+    if (this.r.doc?.readonly) return
+    const keys = Object.keys(style) as (keyof ShapeStyle)[]
+    const edits: ShapeEdit[] = elements.map(element => ({
+      id: element.id, after: style,
+      before: Object.fromEntries(keys.map(key => [key, element[key]])) as ShapeStyle,
+    })).filter(edit => keys.some(key => JSON.stringify(edit.before[key] ?? null) !== JSON.stringify(style[key] ?? null)))
+    if (!edits.length) return
+    this.r.recordShapeEdit(edits)
+    this.applyShapeEdits(edits, 'after')
+  }
+
+  applyShapeEdits(edits: ShapeEdit[], direction: 'before' | 'after'): void {
+    const byId = new Map(edits.map(edit => [edit.id, edit[direction]]))
+    this.updateElements(e => byId.has(e.id) ? { ...e, ...byId.get(e.id) } : e)
+  }
+
+  writeShapeNote(id: string, text: string): void {
+    if (this.r.doc?.readonly) return
+    const note = text.trimEnd()
+    this.updateElements(e => e.id === id && isShape(e) && shapeNote(e) !== note ? withShapeNote(e, note) : e, false)
+  }
+
+  private updateElements(edit: (element: any) => any, write = true): void {
+    if (!this.handle) return
+    let changed = false
+    const elements = this.handle.getScene().elements.map(element => {
+      const next = edit(element)
+      if (next === element) return element
+      changed = true
+      return { ...next, version: (element.version ?? 0) + 1, versionNonce: crypto.getRandomValues(new Uint32Array(1))[0] >>> 1, updated: Date.now() }
+    })
+    if (changed) this.replace(elements, write)
+  }
+
+  /** Transform the selected scene bounds into viewport-space CSS pixels. */
+  selectionBounds(elements: any[]): [number, number, number, number] {
+    const v = this.viewport()
+    const bounds = elements.map(e => visualBoundsOf(e))
+    return [
+      (Math.min(...bounds.map(b => b[0])) + v.scrollX) * v.zoom,
+      (Math.min(...bounds.map(b => b[1])) + v.scrollY) * v.zoom,
+      (Math.max(...bounds.map(b => b[2])) + v.scrollX) * v.zoom,
+      (Math.max(...bounds.map(b => b[3])) + v.scrollY) * v.zoom,
+    ]
+  }
+
+  /** Sync both the reader's selection and the displayed actions after a sidebar or touch pick. */
+  selectShape(id: string): void {
+    this.unpick()
+    this.pick([id])
+  }
+
+  deleteSelectedShapes(): void {
+    const gone = this.removeSelectedShapes()
+    if (gone.length) this.r.recordInkDelete(gone)
+  }
+
+  removeSelectedShapes(): any[] {
+    if (this.r.doc?.readonly) return []
+    const gone = this.drop(this.selectedShapes())
+    this.unpick()
+    return gone
+  }
+
   cornersHtml(): string {
     return `<span class="pr-penrow"><button class="pr-btn pr-tool${this.shownRoundness === 'sharp' ? ' on' : ''}" data-act="roundness" data-v="sharp">${esc(t('shape.sharp'))}</button><button class="pr-btn pr-tool${this.shownRoundness === 'round' ? ' on' : ''}" data-act="roundness" data-v="round">${esc(t('shape.round'))}</button></span>`
   }
@@ -229,6 +286,8 @@ export class InkLayer {
     this.role = tool === 'ink' || tool === 'shape' || tool === 'eraser' ? 'draw' : tool === 'select' ? 'select' : 'idle'
     this.tool = tool === 'ink' ? 'freedraw' : tool === 'eraser' ? 'eraser' : tool === 'shape' ? this.shape : 'selection'
     this.picked.clear()
+    if (this.clearPickTimer) clearTimeout(this.clearPickTimer)
+    this.clearPickTimer = null
     this.touched = false
     this.downs.clear()
     this.settleNow() // 滚动 / 缩放还没收尾就换了工具:当场推视口、露出白板层(不然新工具落下的第一下拿的是旧视口)
@@ -285,11 +344,13 @@ export class InkLayer {
   }
 
   /** 批注数据变了(自己刚收的一笔、别的标签画的、别的窗口写的被并进来):静态图和白板层都跟上。 */
-  onDocChanged(): void {
+  onDocChanged(noteOnly = false): void {
     const ink = this.r.doc?.data.ink
     // 正画着的时候不每笔出图(重出整页太重):停笔一阵再补,缩放时才有一份跟得上的静态图可换(见 onZoom);换工具时也补
-    if (this.role !== 'draw' || !this.handle) this.refreshStatic()
-    else this.scheduleStatic()
+    if (!noteOnly) {
+      if (this.role !== 'draw' || !this.handle) this.refreshStatic()
+      else this.scheduleStatic()
+    }
     if (!this.handle) { if (this.hasInk()) void this.enter(); return }
     if (this.dirty || sigAll(ink) === this.held) return // 自己刚提交的那次签名对得上,不动
     this.held = sigAll(ink)
@@ -365,6 +426,7 @@ export class InkLayer {
     this.zoomHide = false
     this.r.root.classList.remove('pr-scrolling', 'pr-zooming')
     if (this.last) this.hover(this.last[0], this.last[1])
+    this.r.shapeActions.refresh()
   }
   /** 不等了,马上收尾:先把视口推到位(白板层露出来时引擎手里必须是现在的视口),再撤掉藏法。 */
   private settleNow(): void {
@@ -418,6 +480,12 @@ export class InkLayer {
     for (let i = els.length - 1; i >= 0; i--) if (hits(els[i], sx, sy, HIT * u)) return els[i].id
     return null
   }
+  shapeAt(x: number, y: number): string | undefined {
+    const id = this.hitAt(x, y)
+    const hit = id && this.handle?.getScene().elements.find(e => e.id === id)
+    return isShape(hit) ? hit.id : undefined
+  }
+
   /** 整个落在这块客户区矩形里的笔迹 / 形状(引擎框选的规矩:要整个框住)。 */
   within(r: { left: number; top: number; right: number; bottom: number }): string[] {
     if (!this.handle) return []
@@ -429,7 +497,8 @@ export class InkLayer {
     if (!more) this.picked.clear()
     for (const id of ids) { if (more && ids.length === 1 && this.picked.has(id)) this.picked.delete(id); else this.picked.add(id) }
     this.touched = true
-    this.r.renderToolbar()
+    this.r.shapeActions.refresh()
+    this.r.emit()
   }
   owns(target: EventTarget | null): boolean { return target instanceof Node && this.board.contains(target) }
 
@@ -443,18 +512,21 @@ export class InkLayer {
     const at = (px: number, py: number): Element | undefined => document.elementsFromPoint(px, py).find((e) => !this.board.contains(e))
     const c = this.r.container, cr = c.getBoundingClientRect(), k = this.k, under = at(x, y)
     // 滚动条那一条(传统滚动条才有宽度)留给容器自己。
-    const onPage = !!under && c.contains(under) && !under.closest('.pr-pop') && x < cr.left + c.clientWidth * k && y < cr.top + c.clientHeight * k
+    const onPage = !!under && c.contains(under) && !under.closest('.pr-pop, .pr-shape-pin') && x < cr.left + c.clientWidth * k && y < cr.top + c.clientHeight * k
     const busy = (): boolean => !!under!.closest('[data-a], .annotationLayer a, .annotationLayer section, input, textarea, select, button') ||
       [[0, 0], [0, -NEAR_TEXT_Y], [0, NEAR_TEXT_Y], [-NEAR_TEXT_X, 0], [NEAR_TEXT_X, 0]].some(([dx, dy]) => at(x + dx, y + dy)?.closest('.textLayer span'))
     this.board.style.pointerEvents = onPage && (this.hitAt(x, y) != null || this.nearPicked(x, y) || !busy()) ? 'auto' : 'none'
   }
-  private nearPicked(x: number, y: number): boolean {
+  wasPicked(id: string): boolean { return this.picked.has(id) }
+  get clearingSelection(): boolean { return this.clearPickTimer !== null }
+
+  nearPicked(x: number, y: number): boolean {
     if (!this.picked.size || !this.handle) return false
     const [sx, sy, u] = this.toScene(x, y), pad = FRAME * u
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
     for (const e of this.handle.getScene().elements) {
       if (!this.picked.has(e.id)) continue
-      const b = boundsOf(e)
+      const b = visualBoundsOf(e)
       x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3])
     }
     // 只让出外框那一圈(边线、缩放柄都在这上面)。框里面照旧按底下的东西判:圈住一段话的方框选中着,里面的字还得能选。
@@ -483,21 +555,33 @@ export class InkLayer {
     return gone
   }
   /** 我们自己改的不算「引擎那边动过」(那是给撤销账问引擎用的)。 */
-  private replace(elements: any[]): void { const was = this.moved; this.handle!.update({ scene: { elements } }); this.dirty = true; this.commit(); this.moved = was }
+  private replace(elements: any[], write = true): void { const was = this.moved; this.handle!.update({ scene: { elements } }); this.dirty = true; this.commit(write, write ? 'ink' : 'shape-note'); this.moved = was }
 
   /** 指针按在了页面那一边:让引擎放下它选中的东西。接口上没有「取消选中」,借引擎自己的规矩 —— 切到别的工具会清掉选中,再切回来。 */
   unpick(): void {
-    this.picked.clear()
+    this.clearPickedTracking()
     const h = this.handle
     if (!h || !this.touched || this.role !== 'select') return
     this.touched = false
+    if (this.clearPickTimer) clearTimeout(this.clearPickTimer)
     h.update({ tool: 'freedraw' })
-    setTimeout(() => { if (this.handle === h && this.role !== 'draw') h.update({ tool: this.tool }) }, 80) // 引擎是下一拍才清的
+    this.clearPickTimer = setTimeout(() => {
+      this.clearPickTimer = null
+      if (this.handle === h && this.role === 'select') h.update({ tool: this.tool })
+    }, 80) // 引擎是下一拍才清的
+  }
+
+  /** The native board owns selection immediately after duplication. */
+  clearPickedTracking(): void {
+    if (!this.picked.size) return
+    this.picked.clear()
+    this.r.shapeActions.setOutline(false)
+    this.r.emit()
   }
 
   /** 白板上的元素按页拆回去,存页内坐标。write = false:不立刻写盘,交给批注文件自己的 0.4 秒攒批(给一笔收尾这类补变化用;
    *  抬笔、删除、撤销这些「一手」的收尾照旧马上写 —— 退出应用时宿主不等渲染层)。 */
-  private commit(write = true): void {
+  private commit(write = true, kind: 'ink' | 'shape-note' = 'ink'): void {
     if (this.commitTimer) clearTimeout(this.commitTimer)
     this.commitTimer = null
     const doc = this.r.doc
@@ -512,7 +596,7 @@ export class InkLayer {
     doc.data.ink = ink
     this.held = sigAll(ink)
     this.moved = true
-    doc.changed('ink')
+    doc.changed(kind)
     // 一笔一存:退出应用时宿主不等渲染层收尾,刚画的一笔不能留在定时器里。
     // ponytail: 每次都是整份重写(写前还读一遍);笔迹攒到几 MB 时每笔一次读写会变重,到时按页拆文件。
     if (write) void doc.flush()
@@ -533,6 +617,7 @@ export class InkLayer {
     this.entering++
     if (this.commitTimer) clearTimeout(this.commitTimer)
     if (this.scrollTimer) clearTimeout(this.scrollTimer)
+    if (this.clearPickTimer) clearTimeout(this.clearPickTimer)
     if (this.staticTimer) clearTimeout(this.staticTimer)
     this.commit()
     this.handle?.dispose()

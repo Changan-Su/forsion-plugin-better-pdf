@@ -8,6 +8,8 @@ import { icon } from './icons'
 import { t } from './i18n'
 import { tooltips } from './tooltips'
 import { InkLayer, inkAvailable } from './ink'
+import { ShapeActions } from './shapeActions'
+import { isShape, visualBoundsOf, type ShapeEdit } from './shape'
 import { exportAnnotated } from './export'
 import { buildOutline, currentIndex, type Toc } from './outline'
 import { ToolSession, isDiscrete, markColors, type PdfTool, type MarkTool } from './toolSession'
@@ -44,7 +46,7 @@ function remember(c: string): void {
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)) } catch { /* 存不上:只记这一程 */ }
 }
 /** 一次手势(按下到抬起,或一次按键)留下的东西:删掉了哪些批注、白板那边变没变。撤销 / 重做按它走。 */
-interface Step { annots: Annot[]; board: boolean; corners?: { id: string; before: unknown; after: unknown }[]; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
+interface Step { annots: Annot[]; board: boolean; shapeEdits?: ShapeEdit[]; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
 export const KIND_ICON: Record<AnnotType | 'ink', string> = {
   highlight: 'highlighter', underline: 'underline', strike: 'strikethrough', note: 'sticky-note', text: 'type', area: 'square-dashed', ink: 'pen-line',
 }
@@ -163,14 +165,14 @@ export class Reader {
   private log: Step[] = []
   private redoLog: Step[] = []
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
-  private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; hit: string | null; shift: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
+  private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; fromPicked: boolean; hit: string | null; shift: boolean; alt: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
   /** 落在白板层上、被我们拿来滚页面的那根手指(far = 离落点最远到过多远:没怎么动就是一次轻点)。 */
   /** 抓手拖动中(抓手工具、按住空格、中键):按下时的位置和滚动位置。 */
   private pan: { id: number; x: number; y: number; sl: number; st: number; far: number } | null = null
   /** 空格按着:任何工具下临时当抓手,松开回原工具(白板的规矩)。 */
   private spaceHeld = false
   private panEnd = 0
-  private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number } | null = null
+  private finger: { id: number; x: number; y: number; x0: number; y0: number; far: number; shape?: string } | null = null
   /** 笔尖正按在页面上(这时落下来的多半是手掌,不拿它滚页面)。 */
   private penDown = false
   /** 换到橡皮之前手上的工具(E 键、手指连点两下再回去用)。 */
@@ -230,13 +232,14 @@ export class Reader {
   private selectionFrame = 0
   private askSession: { panel: { readonly isOpen: boolean }; enqueue(text: string): void; options: Parameters<HostExtendView['open']>[0] } | null = null
   readonly ink: InkLayer | null
+  readonly shapeActions: ShapeActions
 
   constructor(host: HTMLElement, readonly pdfPath: string, private readonly io?: HostFileIO, private readonly extension?: HostExtendView) {
     this.positionKey = readingPositionKey(pdfPath, !!io)
     this.pendingPosition = readReadingPosition(this.positionKey)
     // 方案 A(11-03):工具和控件浮在页面上 —— 顶部一条透明的带子里放三块(左栏开关 / 居中的工具岛 / 查找与面板),
     // 底下两块(缩放 / 翻页);查找条从右上那块底下垂下来。带子本身不接指针,只有那几块接。
-    this.root = el(`<div class="pr-root">
+    this.root = el(`<div class="pr-root" data-tool="select">
       <div class="pr-body">
         <div class="pr-side ui-popover" hidden><div class="pr-sidetabs"></div><div class="pr-toc"></div><div class="pr-thumbs" hidden></div></div>
         <div class="pr-viewport">
@@ -272,6 +275,8 @@ export class Reader {
       }
     })
     this.ink = inkAvailable() ? new InkLayer(this) : null
+    this.shapeActions = new ShapeActions(this)
+    this.off.push(() => this.shapeActions.dispose())
     // 共用的划线条:翻译、问 Tangu、别的插件的动作都在上面,我们的颜色 / 划线 / 批注是本视图的工具。
     // 文字层是我们自己摆的、只在选择工具下算数,所以不让宿主自己看选区(watch: false),由 onSelection 报。
     this.bar = ctx.ui?.mountSelectionBar?.(this.root, {
@@ -327,7 +332,13 @@ export class Reader {
       const doc = await acquire(this.pdfPath, pdf.fingerprints?.[0] ?? '', this.io)
       if (this.dead) { await release(doc, this.io); return }
       this.doc = doc
-      this.off.push(doc.subscribe((what) => { if (what !== 'ink') this.repaint(); this.ink?.onDocChanged(); this.emit() })) // 只动了笔迹:各页的高亮 / 便签不用重画
+      this.off.push(doc.subscribe((what) => {
+        if (!what) this.repaint()
+        this.ink?.onDocChanged(what === 'shape-note')
+        this.shapeActions.refresh()
+        this.shapeActions.refreshPins()
+        this.emit()
+      })) // 只动了笔迹:各页的高亮 / 便签不用重画
       this.viewer.setDocument(pdf)
       this.linkService.setDocument(pdf, null)
       this.viewer.findController.setDocument(pdf)
@@ -358,12 +369,13 @@ export class Reader {
     }
     eventBus.on('pagerendered', (e: { pageNumber: number }) => {
       this.paintPage(e.pageNumber - 1); this.ink?.onPageRendered(e.pageNumber - 1)
+      this.shapeActions.updatePins(e.pageNumber - 1)
       // 目录等第一页画出来再算:读字和画页走同一个 worker,先算会把第一屏拖慢。
       if (!this.tocStarted) { this.tocStarted = true; setTimeout(() => this.loadToc(), 0) }
     })
     eventBus.on('textlayerrendered', () => this.refreshSelection())
     eventBus.on('pagechanging', () => { this.syncBottombar(); this.syncThumbs(); this.emit() })
-    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.onZoom(); this.placeAnchors() })
+    eventBus.on('scalechanging', () => { this.syncBottombar(); this.closePop(); this.ink?.onZoom(); this.placeAnchors(); this.shapeActions.refresh() })
     eventBus.on('updateviewarea', ({ location }: { location?: { pageNumber: number; top: number; left: number } }) => {
       this.syncToc(location?.pageNumber, location?.top)
       if (!location || !this.positionKey || !this.pagesLoaded || this.pendingPosition || this.dead
@@ -376,7 +388,7 @@ export class Reader {
     // ⌘/Ctrl + 滚轮、触控板捏合(= 带 ctrlKey 的滚轮)缩放,以光标为中心。pdf.js 的组件包不带这一手。
     on(container, 'wheel', (ev: WheelEvent) => this.onWheel(ev), { passive: false })
     // 划线条是按当时的位置摆在视口上的:页面一滚就不在选区旁边了。
-    on(container, 'scroll', () => { this.ink?.onScroll(); this.closePop(); this.refreshSelection() }, { passive: true })
+    on(container, 'scroll', () => { this.ink?.onScroll(); this.closePop(); this.refreshSelection(); this.shapeActions.refresh() }, { passive: true })
     on(container, 'pointerdown', (ev: PointerEvent) => { this.downInPage = ev.pointerId; this.onDown(ev) })
     on(container, 'pointerup', (ev: PointerEvent) => {
       const fromPage = !this.bar || this.downInPage === ev.pointerId
@@ -400,6 +412,9 @@ export class Reader {
       this.pendingPick = null
     }, { capture: true })
     on(this.root, 'focusin', () => setActive(this))
+    on(document, 'pointerdown', (ev: PointerEvent) => {
+      if (!(ev.target as HTMLElement).closest?.('.pr-shape-ui')) this.shapeActions.closePanel()
+    }, { capture: true })
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKey(ev))
     // 捕获阶段:白板引擎的键盘处理挂在它自己的容器上,删除 / 撤销要赶在它前面看到。
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKeyFirst(ev), { capture: true })
@@ -452,6 +467,7 @@ export class Reader {
       const cur = viewer.currentScaleValue
       if (cur === 'page-width' || cur === 'page-fit') viewer.currentScaleValue = cur
       this.ink?.syncViewport()
+      this.shapeActions.refresh()
       if (this.sized) {
         this.flushGoto() // 在后台收到的落点,回到前台、页面按新尺寸排好之后再跳
         this.restoreReadingPosition()
@@ -473,8 +489,10 @@ export class Reader {
   }
 
   private onKey(ev: KeyboardEvent): void {
-    if (ev.key !== 'Escape') return
+    if (ev.key !== 'Escape' || ev.isComposing) return
+    if (this.shapeActions.closePanel(true)) { ev.preventDefault(); ev.stopPropagation(); return }
     if (this.pop) this.closePop()
+    else if (this.ink?.selectedShapes().length) this.ink.unpick()
     else if (!this.q('.pr-findbar').hidden) this.toggleFind(false)
     else if (this.sideOpen()) this.setSide(false)
     else if (this.tool !== this.toolSession.navigation || this.toolSession.locked) this.setTool(this.toolSession.escape())
@@ -548,7 +566,7 @@ export class Reader {
     const inking = this.ink && BOARD_TOOLS.includes(this.tool)
     // 色点只在拿着用得上颜色的工具时出现:选择工具下那排点了只改「下一次高亮的颜色」,屏上什么都不变(用户 11-03 反馈)。
     // 选中的批注在它自己的卡上换色,选中的文字在划线条上换色。
-    const mid = this.tool === 'select' && this.ink?.hasSelectedRectangle() ? this.ink.cornersHtml() : inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? `<button class="pr-color-trigger" data-act="tool-color" title="${esc(t('tool.color'))}" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${this.color}"></span>${icon('chevron-down', 12)}</button>` : ''
+    const mid = inking ? this.ink!.toolbarHtml(btn, sep) : COLOR_TOOLS.includes(this.tool) ? `<button class="pr-color-trigger" data-act="tool-color" title="${esc(t('tool.color'))}" aria-label="${esc(t('tool.color'))}" aria-haspopup="menu"><span class="pr-color-current" style="--c:${this.color}"></span>${icon('chevron-down', 12)}</button>` : ''
     const mode = isDiscrete(this.tool) && ctx.ui?.contextMenu && ctx.ui.popover ? btn('tool-menu', this.toolSession.locked ? 'lock' : 'unlock', t(this.toolSession.locked ? 'tool.kept' : 'tool.once'), this.toolSession.locked) : '<span class="pr-mode-placeholder" aria-hidden="true"></span>'
     // 整条重画,被点的那颗按钮也一起换掉 —— 键盘焦点原来在工具栏上的话会掉到 body 上,接下来的按键(快捷键、Esc、撤销、删除)就没人听了。
     // 重画之后还给同一颗按钮;它不在了(换了工具,那一排没了)就还给页面。
@@ -581,6 +599,8 @@ export class Reader {
     ind.style.transform = `translateX(${x}px)`
     this.indX = x
   }
+
+  rememberColor(color: string): void { if (HEX.test(color)) remember(color) }
 
   /** 一排色点:固定的几种,后面跟着自己挑过的(最近三种;这条批注正用着的不在里面也补上),最后一颗是取色器,什么颜色都行。 */
   dotsHtml(current: string | null, act: string, colors = COLORS): string {
@@ -615,6 +635,7 @@ export class Reader {
     if (this.spaceHeld === on) return
     this.spaceHeld = on
     this.root.toggleAttribute('data-grab', on)
+    this.shapeActions.refresh()
     this.renderToolbar()
   }
 
@@ -633,6 +654,8 @@ export class Reader {
     if (this.press) { const p = this.press; this.press = null; this.repaint(); if (p.tail) this.endTail(p, []) } // 还按着就换了工具:这一下作废(擦到一半变淡的恢复原样;笔尾已经擦掉的笔迹照样记账,好撤销)
     if (tool !== 'select') this.select(null)
     this.ink?.setTool(tool)
+    this.shapeActions.setGesture(false)
+    this.shapeActions.setOutline(false)
     this.renderToolbar()
   }
 
@@ -779,7 +802,7 @@ export class Reader {
 
   // ── 一次按下到抬起:手写笔模式、橡皮擦批注、点选 / 框选、记撤销 ─────────────────────────
   private onPressDown(ev: PointerEvent): void {
-    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar')) return // 浮在页面上的几块不是页面
+    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar, .pr-shape-ui, .pr-shape-pin')) return // 浮在页面上的几块不是页面
     // 抓手:中键随时都是;抓手工具和按住空格时左键也是。按钮、浮层、输入框照常点。
     // 在视口的捕获阶段拦下,页面(选字、便签)和白板层(画)都收不到这一下。
     const grab = ev.button === 1 || (ev.button === 0 && (this.tool === 'hand' || this.spaceHeld))
@@ -792,14 +815,20 @@ export class Reader {
     }
     if (ev.pointerType === 'pen') { this.penDown = true; penSeen = true; if (!penMode) setPenMode(true); else if (!this.q('[data-act="penmode"]')) this.renderToolbar() }
     const onBoard = !!this.ink?.owns(ev.target)
+    // The host temporarily leaves selection while clearing the underlying marquee.
+    // Keep that transient tool from turning a quick second click into a pen stroke.
+    if (onBoard && this.ink?.clearingSelection && ev.pointerType !== 'touch') {
+      ev.preventDefault(); ev.stopPropagation(); return
+    }
     // 手指落在白板层上,而这一下不该是「画」:手写笔模式开着(手指从不画),或者是选择工具
     // (手指没有悬停,白板层收不收指针还停在上一次鼠标的位置上,不能让一次本该点链接的轻点落到引擎手里)。
     // 不交给引擎,我们拿它滚页面;没怎么动就抬起的,当成点在页面上(见 onPressUp)。落在页面上的手指浏览器自己会滚。
     // ponytail: 没有惯性,也没有双指缩放;要有得自己算速度 / 两指间距。
     if (ev.pointerType === 'touch' && (penMode || this.tool === 'select')) {
-      if (!onBoard) return
+      const shape = this.tool === 'select' ? this.ink?.shapeAt(ev.clientX, ev.clientY) : undefined
+      if (!onBoard && !shape) { this.ink?.unpick(); return }
       ev.stopPropagation(); ev.preventDefault()
-      this.finger ??= { id: ev.pointerId, x: ev.clientX, y: ev.clientY, x0: ev.clientX, y0: ev.clientY, far: 0 }
+      this.finger ??= { id: ev.pointerId, x: ev.clientX, y: ev.clientY, x0: ev.clientX, y0: ev.clientY, far: 0, shape }
       return
     }
     // 笔尾的橡皮(指针事件里是 5 号键):按着的这一下当橡皮用,手上的工具不换 —— 白板的规矩。
@@ -812,9 +841,10 @@ export class Reader {
     if (tail) { ev.stopPropagation(); ev.preventDefault() } // preventDefault:落在字上时别开始选字
     this.ink?.take() // 上一手之后才冒出来的变化(引擎给一笔收尾)归上一手,不算进这一手
     const x = ev.clientX, y = ev.clientY
-    this.press = { id: ev.pointerId, x, y, lx: x, ly: y, onBoard, hit: onBoard && !tail && this.tool === 'select' ? this.ink!.hitAt(x, y) : null, shift: ev.shiftKey, erased: new Set(), tail, inkGone: [] }
+    this.press = { id: ev.pointerId, x, y, lx: x, ly: y, onBoard, fromPicked: !!this.ink?.nearPicked(x, y), hit: onBoard && !tail && this.tool === 'select' ? this.ink!.hitAt(x, y) : null, shift: ev.shiftKey, alt: ev.altKey, erased: new Set(), tail, inkGone: [] }
     if (tail) { this.root.dataset.tail = ''; this.closePop(); this.eraseAlong(x, y) }
     else if (this.tool === 'select') {
+      this.shapeActions.setGesture(true)
       if (!onBoard) this.ink?.unpick()
       else { this.closePop(); if (!ev.shiftKey) this.selectMany([]) }
     } else if (this.tool === 'eraser' && onBoard) this.eraseAlong(x, y) // 只有按在白板层上才是在擦:底栏的按钮也在这块区域里,点它不能擦到它身后的批注
@@ -866,6 +896,10 @@ export class Reader {
         if (ev.timeStamp - this.lastTap < 300) { this.lastTap = 0; this.toggleEraser(); return }
         this.lastTap = ev.timeStamp
       }
+      if (this.tool === 'select' && ev.type === 'pointerup' && f.far < 8) {
+        if (f.shape) { this.revealShape(f.shape, false); return }
+        this.ink?.unpick()
+      }
       // 没怎么动:是一次轻点。点的是页面上的东西(链接、批注)就替它点下去。
       const under = ev.type === 'pointerup' && f.far < 8 ? document.elementsFromPoint(f.x0, f.y0).find((e) => !this.ink!.owns(e)) : null
       if (under && this.container.contains(under)) under.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: f.x0, clientY: f.y0 }))
@@ -874,6 +908,7 @@ export class Reader {
     const p = this.press
     if (!p || ev.pointerId !== p.id || this.dead) return
     this.press = null
+    this.shapeActions.setGesture(false)
     if (p.tail) ev.stopPropagation()
     const cancelled = ev.type === 'pointercancel'
     if (cancelled) this.repaint() // 系统收走了这一下:不算数,变淡的批注恢复原样(笔尾已经擦掉的笔迹照样记账,好撤销)
@@ -883,13 +918,15 @@ export class Reader {
     if (!cancelled && (tool === 'eraser' || p.tail) && p.erased.size) gone = this.doc?.removeMany([...p.erased]) ?? []
     if (p.tail) { this.endTail(p, gone); return }
     if (tool === 'select' && p.onBoard && this.ink) {
-      if (p.hit) this.ink.pick([p.hit], p.shift)
-      else if (moved) {
+      if (moved && p.alt) this.ink.clearPickedTracking()
+      else if (p.hit && (!moved || !this.ink.wasPicked(p.hit))) this.ink.pick([p.hit], p.shift)
+      else if (moved && !p.hit && !p.fromPicked) {
         // 框选:画上去的东西引擎自己选;批注由我们按同一个框来选(同一条规矩:要整个框住)。
         const r = { left: Math.min(p.x, ev.clientX), top: Math.min(p.y, ev.clientY), right: Math.max(p.x, ev.clientX), bottom: Math.max(p.y, ev.clientY) }
         this.ink.pick(this.ink.within(r), p.shift)
         this.selectMany([...(p.shift ? this.sel : []), ...this.annotsWithin(r)])
-      } else this.ink.pick([], p.shift)
+      } else if (!moved && !p.hit) this.ink.pick([], p.shift)
+      this.shapeActions.setOutline(false)
     }
     // 引擎处理这次抬起的监听挂在 window 上、排在我们后面:等它处理完再看白板那边变了没有。
     setTimeout(() => {
@@ -930,10 +967,10 @@ export class Reader {
   /** 记下刚结束的这一手。白板那边变没变现问(返回它)。
    *  ponytail: 白板的撤销栈是引擎自己的,我们只记「这一手动没动过它」、撤销时叫它退一步;引擎不经指针和删除键的改动
    *  (方向键挪动之类)不在这本账上,混着撤销时先后可能差一步,不会丢东西。要逐条对上得等宿主把引擎的历史露出来。 */
-  private step(annots: Annot[]): boolean {
+  private step(annots: Annot[], ink?: any[]): boolean {
     const board = this.ink?.take() ?? false
-    if (annots.length || board) { this.log.push({ annots, board }); this.redoLog.length = 0 }
-    if (board) this.redoCut = false // 引擎自己记了新的一手,它那边旧的重做已经作废
+    if (annots.length || board || ink?.length) { this.log.push({ annots, board, ink }); this.redoLog.length = 0 }
+    if (board || ink?.length) this.redoCut = !board
     return board
   }
   /** 笔尾橡皮这一手收尾:白板上的是我们自己擦的(不经引擎),单记一笔,撤销时自己放回去。 */
@@ -944,13 +981,15 @@ export class Reader {
     this.log.push({ annots, board, ink: p.inkGone }); this.redoLog.length = 0
     if (p.inkGone.length) this.redoCut = true
   }
-  recordCornerEdit(corners: NonNullable<Step['corners']>): void {
-    if (!corners.length) return
-    this.log.push({ annots: [], board: false, corners }); this.redoLog.length = 0; this.redoCut = true
+  recordShapeEdit(shapeEdits: ShapeEdit[]): void {
+    this.log.push({ annots: [], board: false, shapeEdits }); this.redoLog.length = 0; this.redoCut = true
+  }
+  recordInkDelete(ink: any[]): void {
+    this.log.push({ annots: [], board: false, ink }); this.redoLog.length = 0; this.redoCut = true
   }
   undo(): void {
     const s = this.log.pop()
-    if (s?.corners) this.ink?.applyCorners(s.corners, 'before')
+    if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'before')
     if (s?.annots.length) this.doc?.restore(s.annots)
     if (s?.ink?.length) this.ink?.putBack(s.ink)
     if (!s || s.board) this.ink?.undo()
@@ -958,7 +997,7 @@ export class Reader {
   }
   redo(): void {
     const s = this.redoLog.pop()
-    if (s?.corners) this.ink?.applyCorners(s.corners, 'after')
+    if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'after')
     // 记下删掉时的样子:撤销之后用户可能又改过评论 / 标签,下次撤销放回的得是改过的这一份。
     if (s?.annots.length) { for (const a of s.annots) this.sel.delete(a.id); s.annots = this.doc?.removeMany(s.annots.map((a) => a.id)) ?? [] }
     if (s?.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
@@ -968,7 +1007,7 @@ export class Reader {
 
   /** 把白板层卸掉重挂。引擎的撤销栈跟着没了,账上「白板那一步」作废(删掉的批注照样能撤销回来)。 */
   remountBoard(): void {
-    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length || s.corners?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink, corners: s.corners }))
+    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length || s.shapeEdits?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink, shapeEdits: s.shapeEdits }))
     this.log = keep(this.log); this.redoLog = keep(this.redoLog)
     this.ink?.remount()
   }
@@ -978,16 +1017,18 @@ export class Reader {
     // 查找也得赶在引擎前面:焦点在白板上时(刚画过、刚点过空白)它把 ⌘/Ctrl+F 当成自己的「搜索画布」吃掉,而它在这里没有界面。
     if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && !ev.shiftKey && k === 'f') { ev.preventDefault(); ev.stopPropagation(); this.toggleFind(true); return }
     // Esc 也一样:焦点在白板上时引擎自己收下、不往上冒。我们有事可做(收浮层、关查找、回到选择工具)就先做并拦下;没事可做再给它(放下它选中的东西)。
+    if (ev.key === 'Escape' && !ev.isComposing && this.shapeActions.closePanel(true)) { ev.preventDefault(); ev.stopPropagation(); return }
     if (ev.key === 'Escape' && this.ink?.owns(ev.target)) { this.onKey(ev); return }
     if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
     // 空格 = 临时抓手。在捕获阶段拦下:焦点在白板层上时引擎也拿空格当抓手,它挪的是自己的画布、和页面对不上。
     // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
-    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
+    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
       ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
       return
     }
+    if ((ev.metaKey || ev.ctrlKey) && (k === 'a' || k === 'd' || k === 'v') && this.ink?.owns(ev.target)) this.ink.clearPickedTracking()
     if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
       // 数字键不算抓手(和白板一样,1 是选择)
       const [tool, shape] = /^[1-9]$/.test(k) ? [this.tools().filter(([x]) => x !== 'hand')[Number(k) - 1]?.[0]] : KEY_TOOL[k] ?? []
@@ -1003,9 +1044,11 @@ export class Reader {
     if ((ev.key !== 'Delete' && ev.key !== 'Backspace') || this.tool !== 'select') return
     // 画上去的东西引擎自己删(这个按键接着会到它那里);选中的批注我们删。两边记成同一手。
     this.ink?.take()
+    const ink = !this.ink?.owns(ev.target) && this.ink?.selectedShapes().length ? this.ink.removeSelectedShapes() : undefined
+    if (ink?.length) { ev.preventDefault(); ev.stopPropagation() }
     const gone = this.doc?.removeMany([...this.sel]) ?? []
     if (gone.length) { this.sel.clear(); this.closePop() }
-    setTimeout(() => { if (!this.dead) this.step(gone) }, 0)
+    setTimeout(() => { if (!this.dead) this.step(gone, ink) }, 0)
   }
 
   // ── 选中文字 ────────────────────────────────────────────────────────────────────
@@ -1157,6 +1200,26 @@ export class Reader {
     const y = a.quads?.length ? Math.max(...a.quads.map((q) => q[1])) : a.rect ? Math.max(a.rect[1], a.rect[3]) : 0
     this.viewer.scrollPageIntoView({ pageNumber: a.page + 1, destArray: [null, { name: 'XYZ' }, null, y + 90, null] })
     this.select(id)
+  }
+
+  revealShape(id: string, scroll = true): void {
+    for (const [key, elements] of Object.entries(this.doc?.data.ink ?? {})) {
+      const element = elements.find(e => e.id === id && isShape(e))
+      if (!element) continue
+      if (this.tool !== 'select') this.setTool('select')
+      this.select(null)
+      if (scroll) {
+        const page = Number(key), vp = this.viewer.getPageView(page)?.viewport.clone({ scale: 1 })
+        if (vp) {
+          const [left, top] = visualBoundsOf(element)
+          const [x, y] = vp.convertToPdfPoint(Math.max(0, left - 48), Math.max(0, top - 80))
+          this.viewer.scrollPageIntoView({ pageNumber: page + 1, destArray: [null, { name: 'XYZ' }, x, y, null] })
+        }
+      }
+      this.ink?.selectShape(id)
+      if (this.ink) this.shapeActions.setOutline(true)
+      return
+    }
   }
 
   private anchorOf(id: string): { left: number; top: number; bottom: number; element: HTMLElement } | null {
@@ -1690,6 +1753,9 @@ export class Reader {
   relocale(): void {
     this.renderToolbar()
     this.renderFindbar()
+    this.shapeActions.closePanel()
+    this.shapeActions.refresh()
+    this.shapeActions.refreshPins()
     if (this.pdf) this.renderBottombar()
     if (this.sideSeg) { this.sideSeg.dispose(); this.sideSeg = null }
     if (!this.q('.pr-side').hidden) this.renderSide()
