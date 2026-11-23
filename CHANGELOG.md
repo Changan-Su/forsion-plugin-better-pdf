@@ -1,5 +1,10 @@
 # 更新日志
 
+## Unreleased
+
+- 高亮、下划线、删除线和页面批注的创建、删除和编辑都可撤销与重做。跨页高亮作为一次操作，重做会还原已选颜色和批注内容。
+- Undo and redo now cover creating, deleting, and editing PDF annotations. A mark spanning several pages is one action, and redo restores its color and annotation content.
+
 ## 0.1.15 — 2026-11-23
 
 - 完成高亮、下划线或删除线时，颜色面板自动出现在新批注旁。点色即可给这一笔换色，按 Esc 或继续标记可以直接收起面板。

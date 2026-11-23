@@ -61,8 +61,17 @@ function remember(c: string): void {
   recent = [c, ...recent.filter((x) => x !== c)].slice(0, 3)
   try { localStorage.setItem(RECENT_KEY, JSON.stringify(recent)) } catch { /* 存不上:只记这一程 */ }
 }
-/** 一次手势(按下到抬起,或一次按键)留下的东西:删掉了哪些批注、白板那边变没变。撤销 / 重做按它走。 */
-interface Step { annots: Annot[]; board: boolean; shapeEdits?: ShapeEdit[]; /** 笔尾橡皮擦掉的笔迹 / 形状(不走引擎的撤销栈,我们自己放回去)。 */ ink?: any[] }
+type AnnotationFields = Pick<Annot, 'color' | 'comment' | 'tags' | 'text'>
+interface AnnotationEdit { id: string; before: Partial<AnnotationFields>; after: Partial<AnnotationFields> }
+interface Step {
+  board: boolean
+  created?: Annot[]
+  removed?: Annot[]
+  annotationEdit?: AnnotationEdit
+  shapeEdits?: ShapeEdit[]
+  /** 笔尾橡皮擦掉的笔迹及形状由阅读器恢复。 */
+  ink?: any[]
+}
 export const KIND_ICON: Record<AnnotType | 'ink', string> = {
   highlight: 'highlighter', underline: 'underline', strike: 'strikethrough', note: 'sticky-note', text: 'type', area: 'square-dashed', ink: 'pen-line',
 }
@@ -187,6 +196,8 @@ export class Reader {
   private heldTool: Tool | null = null
   private log: Step[] = []
   private redoLog: Step[] = []
+  private draftText: string | null = null
+  private commentEdit: { id: string; before: string | undefined; after: string | undefined } | null = null
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
   private press: { id: number; x: number; y: number; lx: number; ly: number; onBoard: boolean; fromPicked: boolean; hit: string | null; shift: boolean; alt: boolean; erased: Set<string>; tail: boolean; inkGone: any[] } | null = null
   /** 落在白板层上、被我们拿来滚页面的那根手指(far = 离落点最远到过多远:没怎么动就是一次轻点)。 */
@@ -754,13 +765,11 @@ export class Reader {
     const kind = from.closest<HTMLElement>('.pr-pop')?.dataset.kind
     if (kind === 'sel') { this.color = c; this.markSelection('highlight'); this.renderToolbar(); return }
     if (kind === 'card') {
-      const doc = this.doc
-      const a = doc?.data.annots.find(annot => annot.id === this.selected)
-      if (!doc || !a) return
-      if (isTextMarkup(a.type)) {
-        doc.recolor(new Set([a.id]), c)
-        this.setMarkColor(a.type, c)
-      } else doc.patch(a.id, { color: c })
+      const a = this.doc?.data.annots.find(annot => annot.id === this.selected)
+      if (!a) return
+      this.finishCommentEdit()
+      this.editAnnotation(a, 'color', c)
+      if (isTextMarkup(a.type)) this.setMarkColor(a.type, c)
       this.pop?.querySelector<HTMLElement>('.pr-color-current')?.style.setProperty('--c', c)
       // 重画这一排:刚用取色器挑的那种原来不在里面。被点的那颗跟着换掉了,键盘焦点还给新的那颗(不然掉到 body 上,Esc、撤销没人听)。
       const dots = this.pop!.querySelector('.pr-dots')!, had = dots.contains(document.activeElement)
@@ -829,6 +838,8 @@ export class Reader {
     if (!at) return
     ev.preventDefault()
     const a = this.doc.add({ type: tool, page: at.page, color: this.color, rect: [at.x, at.y, at.x, at.y], ...(tool === 'text' ? { text: '' } : {}) })
+    if (tool === 'text') this.draftText = a.id
+    else this.recordStep({ board: false, created: [a] })
     this.justMade = performance.now()
     this.setTool('select')
     this.select(a.id)
@@ -1003,49 +1014,121 @@ export class Reader {
   /** 记下刚结束的这一手。白板那边变没变现问(返回它)。
    *  ponytail: 白板的撤销栈是引擎自己的,我们只记「这一手动没动过它」、撤销时叫它退一步;引擎不经指针和删除键的改动
    *  (方向键挪动之类)不在这本账上,混着撤销时先后可能差一步,不会丢东西。要逐条对上得等宿主把引擎的历史露出来。 */
-  private step(annots: Annot[], ink?: any[]): boolean {
+  private recordStep(step: Step): void {
+    this.log.push(step)
+    this.redoLog.length = 0
+    this.redoCut = !step.board
+  }
+
+  private step(removed: Annot[], ink?: any[]): boolean {
     const board = this.ink?.take() ?? false
-    if (annots.length || board || ink?.length) { this.log.push({ annots, board, ink }); this.redoLog.length = 0 }
-    if (board || ink?.length) this.redoCut = !board
+    if (removed.length || board || ink?.length) this.recordStep({ removed, board, ink })
     return board
   }
-  /** 笔尾橡皮这一手收尾:白板上的是我们自己擦的(不经引擎),单记一笔,撤销时自己放回去。 */
-  private endTail(p: NonNullable<Reader['press']>, annots: Annot[]): void {
+
+  /** 笔尾橡皮这一手收尾。 */
+  private endTail(p: NonNullable<Reader['press']>, removed: Annot[]): void {
     delete this.root.dataset.tail
-    const board = this.ink?.take() ?? false // 我们自己擦的不算在里面(见 InkLayer.replace);真是引擎动过才是 true
-    if (!annots.length && !p.inkGone.length && !board) return
-    this.log.push({ annots, board, ink: p.inkGone }); this.redoLog.length = 0
+    const board = this.ink?.take() ?? false
+    if (!removed.length && !p.inkGone.length && !board) return
+    this.recordStep({ removed, board, ink: p.inkGone })
     if (p.inkGone.length) this.redoCut = true
   }
-  recordShapeEdit(shapeEdits: ShapeEdit[]): void {
-    this.log.push({ annots: [], board: false, shapeEdits }); this.redoLog.length = 0; this.redoCut = true
+
+  recordShapeEdit(shapeEdits: ShapeEdit[]): void { this.recordStep({ board: false, shapeEdits }) }
+  recordInkDelete(ink: any[]): void { this.recordStep({ board: false, ink }) }
+
+  private removeAnnotations(ids: string[]): Annot[] {
+    for (const id of ids) this.sel.delete(id)
+    return this.doc?.removeMany(ids) ?? []
   }
-  recordInkDelete(ink: any[]): void {
-    this.log.push({ annots: [], board: false, ink }); this.redoLog.length = 0; this.redoCut = true
+
+  private patchAnnotation(doc: AnnotDoc, annot: Annot, fields: Partial<AnnotationFields>): void {
+    if (fields.color !== undefined && isTextMarkup(annot.type)) doc.recolor(new Set([annot.id]), fields.color)
+    else doc.patch(annot.id, fields)
+  }
+
+  private editAnnotation<K extends keyof AnnotationFields>(annot: Annot, key: K, value: AnnotationFields[K]): void {
+    if (!this.doc || Object.is(annot[key], value)) return
+    const before = { [key]: annot[key] }, after = { [key]: value }
+    this.recordStep({ board: false, annotationEdit: { id: annot.id, before, after } })
+    this.patchAnnotation(this.doc, annot, after)
+  }
+
+  private applyAnnotationEdit(edit: AnnotationEdit, side: 'before' | 'after'): boolean {
+    const doc = this.doc
+    const annot = doc?.data.annots.find(a => a.id === edit.id)
+    if (!doc || !annot) return false
+    const expected = edit[side === 'before' ? 'after' : 'before']
+    for (const key of Object.keys(expected) as (keyof AnnotationFields)[]) {
+      if (JSON.stringify(annot[key]) !== JSON.stringify(expected[key])) return false
+    }
+    this.patchAnnotation(doc, annot, edit[side])
+    return true
+  }
+
+  private editComment(id: string, value: string | undefined): void {
+    const annot = this.doc?.data.annots.find(a => a.id === id)
+    if (!this.doc || !annot || annot.comment === value) return
+    this.commentEdit ??= { id, before: annot.comment, after: value }
+    this.commentEdit.after = value
+    this.doc.patch(id, { comment: value })
+  }
+
+  private finishCommentEdit(): void {
+    const edit = this.commentEdit
+    this.commentEdit = null
+    if (edit && edit.before !== edit.after) {
+      this.recordStep({ board: false, annotationEdit: { id: edit.id, before: { comment: edit.before }, after: { comment: edit.after } } })
+    }
+  }
+
+  private prepareHistoryAction(): void {
+    this.closePop()
+    if (document.activeElement?.closest('.pr-marks')) this.container.focus({ preventScroll: true })
   }
   undo(): void {
+    this.prepareHistoryAction()
     const s = this.log.pop()
     if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'before')
-    if (s?.annots.length) this.doc?.restore(s.annots)
+    // Capture the current record so redo restores any edits made since creation.
+    if (s?.created?.length) s.created = this.removeAnnotations(s.created.map(a => a.id))
+    if (s?.removed?.length) this.doc?.restore(s.removed)
+    if (s?.annotationEdit && !this.applyAnnotationEdit(s.annotationEdit, 'before')) s.annotationEdit = undefined
     if (s?.ink?.length) this.ink?.putBack(s.ink)
     if (!s || s.board) this.ink?.undo()
     if (s) this.redoLog.push(s)
   }
   redo(): void {
+    this.prepareHistoryAction()
     const s = this.redoLog.pop()
     if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'after')
-    // 记下删掉时的样子:撤销之后用户可能又改过评论 / 标签,下次撤销放回的得是改过的这一份。
-    if (s?.annots.length) { for (const a of s.annots) this.sel.delete(a.id); s.annots = this.doc?.removeMany(s.annots.map((a) => a.id)) ?? [] }
+    if (s?.created?.length) this.doc?.restore(s.created)
+    if (s?.removed?.length) s.removed = this.removeAnnotations(s.removed.map(a => a.id))
+    if (s?.annotationEdit && !this.applyAnnotationEdit(s.annotationEdit, 'after')) s.annotationEdit = undefined
     if (s?.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
     if (s ? s.board : !this.redoCut) this.ink?.redo()
     if (s) this.log.push(s)
   }
 
-  /** 把白板层卸掉重挂。引擎的撤销栈跟着没了,账上「白板那一步」作废(删掉的批注照样能撤销回来)。 */
+  /** 白板重挂会丢弃它自己的历史，阅读器记录的操作继续有效。 */
   remountBoard(): void {
-    const keep = (l: Step[]): Step[] => l.filter((s) => s.annots.length || s.ink?.length || s.shapeEdits?.length).map((s) => ({ annots: s.annots, board: false, ink: s.ink, shapeEdits: s.shapeEdits }))
-    this.log = keep(this.log); this.redoLog = keep(this.redoLog)
+    const keep = (log: Step[]): Step[] => log.filter(s => s.created?.length || s.removed?.length || s.annotationEdit || s.ink?.length || s.shapeEdits?.length)
+      .map(s => ({ ...s, board: false }))
+    this.log = keep(this.log)
+    this.redoLog = keep(this.redoLog)
     this.ink?.remount()
+  }
+
+  private onHistoryKey(ev: KeyboardEvent): boolean {
+    const key = ev.key.toLowerCase()
+    if (ev.isComposing || ev.defaultPrevented || (!ev.metaKey && !ev.ctrlKey) || (key !== 'z' && key !== 'y')
+      || (ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return false
+    ev.preventDefault()
+    ev.stopPropagation()
+    if (key === 'y' || ev.shiftKey) this.redo()
+    else this.undo()
+    return true
   }
 
   private onKeyFirst(ev: KeyboardEvent): void {
@@ -1059,11 +1142,7 @@ export class Reader {
     // 空格 = 临时抓手。在捕获阶段拦下:焦点在白板层上时引擎也拿空格当抓手,它挪的是自己的画布、和页面对不上。
     // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
     if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin, .pr-mark-colors button')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
-    if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
-      ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
-      if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
-      return
-    }
+    if (this.onHistoryKey(ev)) return
     if ((ev.metaKey || ev.ctrlKey) && (k === 'a' || k === 'd' || k === 'v') && this.ink?.owns(ev.target)) this.ink.clearPickedTracking()
     if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
       // 数字键不算抓手(和白板一样,1 是选择)
@@ -1213,6 +1292,7 @@ export class Reader {
     const doc = this.doc
     if (!doc) return []
     const marks = pages.map((p, index) => doc.add({ type, page: p.page, color: toolColors[type], quads: p.quads, text: index === 0 ? text : '' }))
+    if (marks.length) this.recordStep({ board: false, created: marks })
     window.getSelection()?.removeAllRanges()
     this.justMade = performance.now()
     this.closePop()
@@ -1298,8 +1378,12 @@ export class Reader {
     const grow = (): void => { if (body) { body.style.height = 'auto'; body.style.height = `${Math.min(220, body.scrollHeight)}px` } }
     if (body) {
       body.value = a.comment ?? ''
-      body.addEventListener('input', () => { this.doc?.patch(id, { comment: body.value || undefined }); grow() })
+      body.addEventListener('input', () => { this.editComment(id, body.value || undefined); grow() })
     }
+    const cardBody = pop.querySelector<HTMLElement>('.pr-card-body')!
+    cardBody.addEventListener('focusout', (event: FocusEvent) => {
+      if (!cardBody.contains(event.relatedTarget as Node | null)) this.finishCommentEdit()
+    })
     const tagsBox = pop.querySelector<HTMLElement>('.pr-tags')!
     const drawTags = (): void => {
       tagsBox.innerHTML = (a.tags ?? []).map((g, i) => `<button class="pr-tag" data-pop="untag" data-i="${i}" title="${esc(t('card.removeTag'))}">#${esc(g)}</button>`).join('') +
@@ -1311,10 +1395,14 @@ export class Reader {
       if (!b) return
       const act = b.dataset.pop
       if (act === 'color-menu') { const palette = pop.querySelector<HTMLElement>('.pr-card-colors')!; palette.hidden = !palette.hidden; if (!palette.hidden) palette.innerHTML = this.dotsHtml(a.color, 'color') }
-      else if (act === 'delete') { this.closePop(); this.sel.delete(id); this.log.push({ annots: this.doc?.removeMany([id]) ?? [], board: false }); this.redoLog.length = 0 }
+      else if (act === 'delete') {
+        this.closePop()
+        const removed = this.removeAnnotations([id])
+        if (removed.length) this.recordStep({ board: false, removed })
+      }
       else if (act === 'cite') this.cite(a)
       else if (act === 'ask') this.ask([a.text, a.comment].filter(Boolean).join('\n\n'), a.page + 1)
-      else if (act === 'untag') { this.doc?.patch(id, { tags: (a.tags ?? []).filter((_, i) => i !== Number(b.dataset.i)) }); drawTags() }
+      else if (act === 'untag') { this.finishCommentEdit(); this.editAnnotation(a, 'tags', (a.tags ?? []).filter((_, i) => i !== Number(b.dataset.i))); drawTags() }
       else if (act === 'tag') {
         const input = el<HTMLInputElement>(`<input class="pr-taginput" placeholder="${esc(t('card.tagPlaceholder'))}">`)
         b.replaceWith(input)
@@ -1324,7 +1412,7 @@ export class Reader {
           if (closed) return // 重画标签会把输入框摘掉,摘掉又触发一次失焦:只认第一次
           closed = true
           const v = input.value.trim().replace(/^#/, '')
-          if (keep && v && !(a.tags ?? []).includes(v)) this.doc?.patch(id, { tags: [...(a.tags ?? []), v] })
+          if (keep && v && !(a.tags ?? []).includes(v)) this.editAnnotation(a, 'tags', [...(a.tags ?? []), v])
           drawTags()
         }
         input.addEventListener('keydown', (k) => { if (k.key === 'Enter') done(true); else if (k.key === 'Escape') { k.stopPropagation(); done(false) } })
@@ -1337,7 +1425,7 @@ export class Reader {
       // 公式、列表、[[双链]] 按 Amadeus 的写法渲染;存的仍是这段 Markdown 原文
       const h = ctx.ui!.mountMarkdownEditor!(pop.querySelector<HTMLElement>('.pr-card-md')!, {
         value: a.comment ?? '', label: t('card.placeholder'), modes: false, vault: true,
-        onChange: (md) => this.doc?.patch(id, { comment: md.trimEnd() || undefined }), // 编辑器序列化总带个结尾换行,不存它
+        onChange: (md) => this.editComment(id, md.trimEnd() || undefined),
       })
       this.cardMd = { pop, h }
       if (focus) h.focus()
@@ -1355,6 +1443,7 @@ export class Reader {
       pop.dataset.hosted = ''
       pop.addEventListener('click', (e) => this.onAct(e))
       pop.addEventListener('change', (e) => this.onColor(e))
+      pop.addEventListener('keydown', (e) => this.onHistoryKey(e), { capture: true })
       // Annotation marks are repainted while comments change. Keep a stable,
       // inert anchor outside the marks so typing cannot move the host card to (0, 0).
       const marker = document.createElement('span')
@@ -1367,7 +1456,7 @@ export class Reader {
         side: prefer === 'above' ? 'top' : 'bottom',
         label: t('view.annots'),
         mount: (host) => { host.append(pop); const off = tooltips(pop); queueMicrotask(() => { if (this.pop === pop && pop.isConnected && pop.hasAttribute('data-autofocus')) pop.querySelector('textarea')?.focus({ preventScroll: true }) }); return () => { off(); marker.remove(); this.dropCardMd(pop) } },
-        onClose: () => { if (this.pop === pop) { this.pop = null; this.hostPop = null; if (!this.dead) this.container.focus({ preventScroll: true }) } },
+        onClose: () => { if (this.pop === pop) { this.finishCommentEdit(); this.pop = null; this.hostPop = null; if (!this.dead) this.container.focus({ preventScroll: true }) } },
       })
       return
     }
@@ -1393,6 +1482,7 @@ export class Reader {
   }
 
   closePop(): void {
+    this.finishCommentEdit()
     this.colorPop?.dispose(); this.colorPop = null
     this.dropCardMd()
     this.hideBar()
@@ -1851,10 +1941,18 @@ export class Reader {
   /** 页面上的文字框失焦:内容收进数据;空的就删掉。 */
   commitText(box: HTMLElement | null): void {
     const id = box?.classList?.contains('pr-text') ? box.dataset.a : undefined
-    if (!id || !this.doc) return
+    const annot = id && this.doc?.data.annots.find(a => a.id === id)
+    if (!annot || !this.doc) return
+    const draft = this.draftText === id
+    if (draft) this.draftText = null
     const text = (box!.innerText ?? '').replace(/\n+$/, '')
-    if (!text.trim()) { if (this.sel.delete(id)) this.closePop(); this.doc.remove(id) }
-    else this.doc.patch(id, { text })
+    if (!text.trim()) {
+      const removed = this.removeAnnotations([annot.id])
+      if (!draft && removed.length) this.recordStep({ board: false, removed })
+    } else if (draft) {
+      this.recordStep({ board: false, created: [annot] })
+      this.doc.patch(annot.id, { text })
+    } else this.editAnnotation(annot, 'text', text)
   }
 }
 
