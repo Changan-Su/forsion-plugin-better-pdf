@@ -5,7 +5,9 @@ import { isShape, shapeNote, withShapeNote } from './shape'
 
 type ChangeKind = 'ink' | 'shape-note'
 
-export type AnnotType = 'highlight' | 'underline' | 'strike' | 'note' | 'text' | 'area'
+export type TextMarkup = 'highlight' | 'underline' | 'strike'
+export type AnnotType = TextMarkup | 'note' | 'text' | 'area'
+export const isTextMarkup = (type: unknown): type is TextMarkup => type === 'highlight' || type === 'underline' || type === 'strike'
 
 export interface Annot {
   id: string
@@ -63,13 +65,13 @@ function parse(text: string): Partial<Sidecar> | null {
 
 /** 三方合并一组带 id 的条目:base = 上次盘上那份,ours = 内存里的,theirs = 盘上现在的(别的窗口写的)。
  *  两边各自新加的都留;一边删了另一边没动的 → 删;两边都改了同一条 → 留我们的。 */
-function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string, combine?: (base: T, ours: T, theirs: T) => T): T[] {
+function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string, combine?: (base: T, ours: T, theirs: T | undefined) => T | undefined): T[] {
   const b = new Map(base.map((x) => [id(x), x])), o = new Set(ours.map(id)), th = new Map(theirs.map((x) => [id(x), x]))
   const out: T[] = []
   for (const x of ours) {
     const bx = b.get(id(x)), tx = th.get(id(x)), mine = !bx || stamp(bx) !== stamp(x) // 我们新加的 / 改过的
-    if (tx) out.push(mine ? (combine && bx && stamp(bx) !== stamp(tx) ? combine(bx, x, tx) : x) : tx)
-    else if (mine) out.push(x)
+    const merged = mine ? (combine && bx && (!tx || stamp(bx) !== stamp(tx)) ? combine(bx, x, tx) : x) : tx
+    if (merged !== undefined) out.push(merged)
   }
   for (const x of theirs) if (!o.has(id(x)) && !b.has(id(x))) out.push(x)
   return out
@@ -96,12 +98,30 @@ function mergeInk(base: Ink, ours: Ink, theirs: Ink): Ink {
     updated: Date.now(),
   } }
 }
-function mergeSidecar(base: Partial<Sidecar> | null, ours: Sidecar, theirs: Partial<Sidecar>): Sidecar {
+/** Color-only edits follow the surviving annotation and never undo its removal. */
+function mergeAnnotation(base: Annot, ours: Annot, theirs: Annot | undefined, recolored: boolean): Annot | undefined {
+  if (!isTextMarkup(base.type)) return ours
+  const content = (annot: Annot): string => {
+    const { color, modified, ...rest } = annot
+    return JSON.stringify(rest)
+  }
+  const baseContent = content(base)
+  if (recolored && content(ours) === baseContent) {
+    if (!theirs || ours.color === base.color) return theirs
+    return { ...theirs, color: ours.color, modified: ours.modified }
+  }
+  if (theirs && ours.color === base.color && theirs.color !== base.color && content(theirs) === baseContent) {
+    return { ...ours, color: theirs.color }
+  }
+  return ours
+}
+
+function mergeSidecar(base: Partial<Sidecar> | null, ours: Sidecar, theirs: Partial<Sidecar>, recolored: ReadonlySet<string>): Sidecar {
   const ink: Record<string, any[]> = {}
-  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.versionNonce}:${x.el?.x}:${x.el?.y}`, mergeInk)) (ink[page] ??= []).push(el)
+  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.versionNonce}:${x.el?.x}:${x.el?.y}`, (b, o, t) => t ? mergeInk(b, o, t) : o)) (ink[page] ??= []).push(el)
   return {
     version: VERSION, fingerprint: ours.fingerprint, note: ours.note ?? theirs.note, ink,
-    annots: merge3(base?.annots ?? [], ours.annots, theirs.annots ?? [], (a) => a.id, (a) => a.modified),
+    annots: merge3(base?.annots ?? [], ours.annots, theirs.annots ?? [], (a) => a.id, (a) => JSON.stringify(a), (b, o, t) => mergeAnnotation(b, o, t, recolored.has(o.id))),
   }
 }
 
@@ -149,6 +169,7 @@ export class AnnotDoc {
   /** 盘上那份的原文(上次读到 / 写下的);null = 盘上没有。 */
   private disk: string | null = null
   private warned = false
+  private pendingRecolors = new Set<string>()
   readonly path: string
 
   private readonly sources = new Set<HostFileIO>()
@@ -230,6 +251,7 @@ export class AnnotDoc {
 
   private async write(): Promise<void> {
     if (!this.dirty || this.readonly) return
+    let savingRecolors: Set<string> | undefined
     try {
       // 写之前再读一遍:和上次不一样 = 别的窗口写过(或者上次没读到)→ 把那边的并进来再写,不整份盖掉。
       const current = await (this.io ?? ctx.app).readBytes!(this.path)
@@ -238,12 +260,14 @@ export class AnnotDoc {
         const theirs = parse(now)
         if (!theirs) throw new Error('盘上的批注文件现在读不出来,不覆盖')
         if ((theirs.version ?? 1) > VERSION) { this.take(theirs); for (const cb of [...this.subs]) cb(); return }
-        this.data = mergeSidecar(this.disk == null ? null : parse(this.disk), this.data, theirs)
+        this.data = mergeSidecar(this.disk == null ? null : parse(this.disk), this.data, theirs, this.pendingRecolors)
         for (const cb of [...this.subs]) cb()
       }
       this.disk = now
-      if (now == null && isEmpty(this.data)) { this.dirty = false; return } // 没批注过的 PDF 不留空文件
+      if (now == null && isEmpty(this.data)) { this.dirty = false; this.pendingRecolors.clear(); return } // 没批注过的 PDF 不留空文件
       const text = JSON.stringify(this.data, null, 1)
+      savingRecolors = this.pendingRecolors
+      this.pendingRecolors = new Set()
       this.dirty = false // 写的途中再改会重新标脏
       await (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text))
       this.disk = text
@@ -251,6 +275,7 @@ export class AnnotDoc {
       if (!this.io) void remember(this.data.fingerprint, this.path)
     } catch (e) {
       this.dirty = true
+      if (savingRecolors) for (const id of savingRecolors) this.pendingRecolors.add(id)
       console.error('[pdf-reader] 批注没能保存', e)
       if (!this.warned) { this.warned = true; ctx.notify?.(t('save.failed'), { level: 'error' }) }
     }
@@ -260,6 +285,8 @@ export class AnnotDoc {
   flushNow(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     if (!this.dirty || this.readonly || (this.disk == null && isEmpty(this.data))) return
+    // Run a pending recolor through the merge path, including when closing.
+    if (this.pendingRecolors.size) { void this.flush(); return }
     const text = JSON.stringify(this.data, null, 1)
     this.dirty = false
     void (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text)).then(() => { this.disk = text }, () => { this.dirty = true })
@@ -281,6 +308,21 @@ export class AnnotDoc {
     this.changed()
   }
 
+  recolor(ids: ReadonlySet<string>, color: string): boolean {
+    const marks = this.data.annots.filter(a => ids.has(a.id))
+    const changed = marks.filter(a => a.color !== color)
+    if (changed.length) {
+      const modified = new Date().toISOString()
+      for (const mark of changed) {
+        Object.assign(mark, { color, modified })
+        this.pendingRecolors.add(mark.id)
+      }
+      this.changed()
+      void this.flush()
+    }
+    return marks.length > 0
+  }
+
   remove(id: string): void { this.removeMany([id]) }
 
   /** 一次删几条(橡皮扫过、框选后按删除),返回删掉的那些,留给撤销。 */
@@ -288,6 +330,7 @@ export class AnnotDoc {
     const gone: Annot[] = []
     for (let i = this.data.annots.length - 1; i >= 0; i--) if (ids.includes(this.data.annots[i].id)) gone.unshift(...this.data.annots.splice(i, 1))
     if (!gone.length) return gone
+    for (const mark of gone) this.pendingRecolors.delete(mark.id)
     this.changed()
     void this.flush()
     return gone

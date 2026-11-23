@@ -286,6 +286,12 @@
 .pr-color-menu .pr-dots { display: flex; flex-wrap: wrap; max-width: 240px; padding: 5px; gap: 4px; }
 .pr-color-menu .pr-dot { width: 28px; height: 28px; }
 .pr-color-menu .pr-dot.on::before { outline: 1px solid var(--text); outline-offset: 2px; }
+.pr-mark-colors { display: flex; align-items: center; gap: 4px; padding: 0 3px 0 9px; max-width: calc(100% - 16px); box-shadow: var(--card-shadow); user-select: none; }
+.pr-mark-color-kind { display: grid; place-items: center; box-sizing: border-box; flex: none; width: 23px; height: 20px; padding-right: 7px; border-right: 1px solid var(--border); color: var(--text-muted); }
+.pr-mark-colors .pr-dots { flex: 0 1 auto; min-width: 0; gap: 2px; padding: 3px 1px; }
+.pr-mark-colors .pr-dot { width: 27px; }
+.pr-mark-colors .pr-dot:hover { background: var(--bg-hover); }
+.pr-mark-colors .pr-dot.on::before { box-shadow: none; }
 .pr-tools .pr-tool[data-act="tool-menu"] { margin-left: 3px; }
 @media (pointer: coarse) { .pr-color-menu .pr-dot { width: 44px; height: 44px; } }
 

@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.1.15 — 2026-11-23
+
+- 完成高亮、下划线或删除线时，颜色面板自动出现在新批注旁。点色即可给这一笔换色，按 Esc 或继续标记可以直接收起面板。
+- 三种文字标记各自记住上次选的颜色。从已有批注上改色也会更新该工具的下次颜色。已打开的 PDF 会一起更新工具颜色。
+
+- Finishing a highlight, underline, or strikethrough opens a color palette beside the new mark. Pick a color to recolor that mark, or press Esc or keep marking to dismiss the palette.
+- Each text markup tool remembers its last color. Recoloring an existing mark updates that tool's color in open PDFs and for future marks.
+
 ## 0.1.14 — 2026-11-22
 
 - 选中矩形、椭圆、箭头或直线后，可以在图形旁改描边颜色、写 Markdown 备注，或从「⋯」调整线宽、矩形圆角和删除。多选可批量改样式，窄分栏里的操作从底部展开。
