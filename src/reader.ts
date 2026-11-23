@@ -518,8 +518,24 @@ export class Reader {
     this.off.push(() => ro.disconnect())
   }
 
-  onWheel(ev: WheelEvent): void {
-    if (!ev.ctrlKey && !ev.metaKey) return
+  onWheel(ev: WheelEvent, fromBoard = false): void {
+    if (!ev.ctrlKey && !ev.metaKey) {
+      if (!ev.shiftKey && !fromBoard) return
+      ev.preventDefault()
+      const c = this.container
+      const mode = ev.deltaMode
+      const dx = ev.shiftKey ? ev.deltaX || ev.deltaY : ev.deltaX
+      const dy = ev.shiftKey ? 0 : ev.deltaY
+      if (mode === WheelEvent.DOM_DELTA_PAGE) {
+        c.scrollBy(dx * c.clientWidth, dy * c.clientHeight)
+      } else {
+        const pixels = mode === WheelEvent.DOM_DELTA_LINE ? (parseFloat(getComputedStyle(c).lineHeight) || 16)
+          : 1 / (c.currentCSSZoom || 1)
+        c.scrollBy(dx * pixels, dy * pixels)
+      }
+      if (fromBoard) this.ink?.syncViewport() // 同一拍更新白板，不等 scroll 事件
+      return
+    }
     ev.preventDefault() // 不拦的话是整个界面被浏览器缩放
     if (!this.pdf || !ev.deltaY) return
     // pdf.js 拿「origin − 容器的 offsetLeft / offsetTop」当指针在容器里的位置(它以为自己占满整页、没有界面缩放)。

@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.1.17 — 2026-11-23
+
+- 放大 PDF 后，按住 Shift 滚动鼠标滚轮即可横向移动。手形和手写模式都支持这一操作。
+- Hold Shift and scroll the mouse wheel to pan sideways in a zoomed PDF. This works in both Hand and Ink modes.
+
 ## 0.1.16 — 2026-11-23
 
 - 高亮、下划线、删除线和页面批注的创建、删除和编辑都可撤销与重做。跨页高亮作为一次操作，重做会还原已选颜色和批注内容。
