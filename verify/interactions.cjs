@@ -192,6 +192,7 @@ async function main() {
         const el = document.querySelector('.pr-container')
         return el.scrollWidth - el.clientWidth >= 400 && el.scrollHeight - el.clientHeight >= 400
       })
+      const scale = await scroller.evaluate(el => el.currentCSSZoom || 1)
       const runWheel = async (dx, dy, axis, modifier) => {
         await scroller.evaluate(el => { el.scrollTo(400, 400) })
         const position = () => scroller.evaluate(el => ({ x: el.scrollLeft, y: el.scrollTop }))
@@ -204,7 +205,8 @@ async function main() {
         await until(async () => moved(await position()), 1000)
         const after = await position()
         const other = axis === 'x' ? 'y' : 'x'
-        return { ok: Math.sign(after[axis] - before[axis]) === Math.sign(axis === 'y' ? dy : dx || dy)
+        const screenDelta = (after[axis] - before[axis]) * scale
+        return { ok: Math.abs(screenDelta - (axis === 'y' ? dy : dx || dy)) <= 2
           && Math.abs(after[other] - before[other]) <= 1, before, after }
       }
       for (const mode of ['hand', 'ink']) {

@@ -523,13 +523,15 @@ export class Reader {
       if (!ev.shiftKey && !fromBoard) return
       ev.preventDefault()
       const c = this.container
-      if (ev.shiftKey) {
-        const mode = ev.deltaMode
-        const pixels = mode === WheelEvent.DOM_DELTA_LINE ? (parseFloat(getComputedStyle(c).lineHeight) || 16)
-          : mode === WheelEvent.DOM_DELTA_PAGE ? c.clientWidth : 1 / (c.currentCSSZoom || 1)
-        c.scrollBy((ev.deltaX || ev.deltaY) * pixels, 0)
+      const mode = ev.deltaMode
+      const dx = ev.shiftKey ? ev.deltaX || ev.deltaY : ev.deltaX
+      const dy = ev.shiftKey ? 0 : ev.deltaY
+      if (mode === WheelEvent.DOM_DELTA_PAGE) {
+        c.scrollBy(dx * c.clientWidth, dy * c.clientHeight)
       } else {
-        c.scrollBy(ev.deltaX, ev.deltaY)
+        const pixels = mode === WheelEvent.DOM_DELTA_LINE ? (parseFloat(getComputedStyle(c).lineHeight) || 16)
+          : 1 / (c.currentCSSZoom || 1)
+        c.scrollBy(dx * pixels, dy * pixels)
       }
       if (fromBoard) this.ink?.syncViewport() // 同一拍更新白板，不等 scroll 事件
       return
