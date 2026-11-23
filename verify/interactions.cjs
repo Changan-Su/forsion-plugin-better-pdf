@@ -413,7 +413,7 @@ async function main() {
     await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme_skin', 'sage'); localStorage.setItem('forsion_theme_bg', 'sage') }); await app.close(); app = null; await boot(); await win.waitForTimeout(600)
     await win.screenshot({ path: path.join(SHOTS, 'sage.png') })
     if (out) {
-      const activeReader = win.locator('.pr-root:visible')
+      const activeReader = win.locator('.pr-root:visible:not([inert])')
       await activeReader.evaluate(el => { el.dataset.originalReader = '' })
       const fileRow = win.locator('.t2s-srow').filter({ has: win.locator('.t2s-srow-title', { hasText: out }) }).first()
       await fileRow.click()
@@ -425,7 +425,7 @@ async function main() {
       await activeReader.locator('[data-act="tool-color"]').click()
       await win.locator('.pr-color-menu [data-v="#5fb236"]').click()
       await win.locator('.t2s-srow', { has: win.getByText(PDF, { exact: true }) }).click()
-      await activeReader.waitFor({ state: 'visible' })
+      await win.locator('.pr-root[data-original-reader]:not([inert])').waitFor({ state: 'visible' })
       await highlighter.click()
       record('the already-open PDF uses the color updated in the second PDF', await activeReader.getAttribute('data-original-reader') === ''
         && await activeReader.locator('.pr-toolbar .pr-color-current').evaluate(el => el.style.getPropertyValue('--c')) === '#5fb236')
