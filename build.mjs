@@ -21,6 +21,21 @@ const asText = {
   },
 }
 
+// pdf.js 自带的查看器样式表给它自己的页面部件写的圆角(4px、8px…)不归宿主 token 管,也不该去改。
+// 进包时给这些行标上 forsion-style: off,check-plugin --style 就不把它们算成插件自己写死的圆角。
+const vendorCss = {
+  name: 'pdfjs-viewer-css',
+  setup(b) {
+    b.onLoad({ filter: /pdfjs-dist[\\/].*pdf_viewer\.css$/ }, async (a) => ({
+      contents: (await readFile(a.path, 'utf8')).replace(
+        /^([ \t]*border-radius\s*:.*(?<![\w.])(?:[4-9]|[1-9]\d+)(?:\.\d+)?px\b.*)$/gm,
+        '$1 /* forsion-style: off (pdf.js viewer stylesheet) */',
+      ),
+      loader: 'text',
+    }))
+  },
+}
+
 export const options = {
   entryPoints: ['src/index.ts'],
   outfile: 'main.js',
@@ -34,7 +49,7 @@ export const options = {
   sourcemap: false,
   legalComments: 'none',
   loader: { '.css': 'text' },
-  plugins: [asText],
+  plugins: [asText, vendorCss],
   metafile: true,
   logLevel: 'info',
 }

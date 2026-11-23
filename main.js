@@ -975,7 +975,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
      -moz-user-select:none;
           user-select:none;
 
-  border-radius:4px;
+  border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
 
   border:1px solid var(--message-bar-border-color);
   background:var(--message-bar-bg-color);
@@ -1194,7 +1194,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
   }
 
 #editorUndoBar #editorUndoBarUndoButton{
-    border-radius:4px;
+    border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
     font-weight:590;
     line-height:19.5px;
     color:var(--undo-button-fg-color);
@@ -1476,7 +1476,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
   font-size:13px;
   font-weight:400;
   line-height:150%;
-  border-radius:4px;
+  border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
   padding:12px 16px;
   border:1px solid var(--dialog-border-color);
   background:var(--dialog-bg-color);
@@ -1569,7 +1569,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
         }
 
 :is(.dialog .mainContainer) button:not(:is(.toggle-button,.closeButton,.clearInputButton)){
-      border-radius:4px;
+      border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
       border:1px solid;
       font:menu;
       font-weight:590;
@@ -1658,7 +1658,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
       resize:none;
       margin:0;
       box-sizing:border-box;
-      border-radius:4px;
+      border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
       border:1px solid var(--textarea-border-color);
       background:var(--textarea-bg-color);
       color:var(--textarea-fg-color);
@@ -1861,7 +1861,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
     background-color:var(--highlight-bg-color);
     -webkit-backdrop-filter:var(--highlight-backdrop-filter);
             backdrop-filter:var(--highlight-backdrop-filter);
-    border-radius:4px;
+    border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
   }
 
 .appended:is(.textLayer .highlight){
@@ -1869,11 +1869,11 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
     }
 
 .begin:is(.textLayer .highlight){
-      border-radius:4px 0 0 4px;
+      border-radius:4px 0 0 4px; /* forsion-style: off (pdf.js viewer stylesheet) */
     }
 
 .end:is(.textLayer .highlight){
-      border-radius:0 4px 4px 0;
+      border-radius:0 4px 4px 0; /* forsion-style: off (pdf.js viewer stylesheet) */
     }
 
 .middle:is(.textLayer .highlight){
@@ -2345,7 +2345,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
   margin:-1px;
   padding:1px;
   background-color:rgb(239 203 237);
-  border-radius:4px;
+  border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
 }
 
 .xfaLayer .highlight.appended{
@@ -2353,11 +2353,11 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
 }
 
 .xfaLayer .highlight.begin{
-  border-radius:4px 0 0 4px;
+  border-radius:4px 0 0 4px; /* forsion-style: off (pdf.js viewer stylesheet) */
 }
 
 .xfaLayer .highlight.end{
-  border-radius:0 4px 4px 0;
+  border-radius:0 4px 4px 0; /* forsion-style: off (pdf.js viewer stylesheet) */
 }
 
 .xfaLayer .highlight.middle{
@@ -3087,7 +3087,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
       height:32px;
       padding-inline:8px calc(4px + var(--button-dimension));
       box-sizing:border-box;
-      border-radius:4px;
+      border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
       border:1px solid var(--border-color);
     }
 
@@ -3423,7 +3423,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
               padding:6px 8px 7px;
               margin:0;
               background-color:var(--thickness-bg);
-              border-radius:4px 4px 0 0;
+              border-radius:4px 4px 0 0; /* forsion-style: off (pdf.js viewer stylesheet) */
               border-inline:var(--thickness-border);
               border-top:var(--thickness-border);
               pointer-events:auto;
@@ -3451,7 +3451,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
 
 :is(:is(#addSignatureDrawContainer:is(:is(:is(#addSignatureDialog .mainContainer) #addSignatureActionContainer) > [role="tabpanel"]) #thickness) > div)  > input{
 
-                border-radius:4.5px;
+                border-radius:4.5px; /* forsion-style: off (pdf.js viewer stylesheet) */
                 border:0;
                 color:var(--signature-color);
               }
@@ -3546,7 +3546,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
             border-width:var(--clear-signature-button-border-width);
             border-style:var(--clear-signature-button-border-style);
             border-color:var(--clear-signature-button-border-color);
-            border-radius:4px;
+            border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
           }
 
 :is(:is(:is(:is(:is(#addSignatureDialog .mainContainer) #addSignatureActionContainer) #addSignatureControls) #horizontalContainer) #clearSignatureButton)  > span{
@@ -3723,7 +3723,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
 
 :is(:is(#editorSignatureParamsToolbar #addSignatureDoorHanger) .toolbarAddSignatureButtonContainer) button{
         border:var(--button-signature-border);
-        border-radius:4px;
+        border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
         background-color:var(--button-signature-bg);
         color:var(--button-signature-color);
       }
@@ -3764,7 +3764,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
         align-items:center;
         justify-content:flex-start;
         outline:none;
-        border-radius:4px;
+        border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
         box-sizing:border-box;
         font:message-box;
         position:relative;
@@ -3786,7 +3786,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
           padding:4px;
           box-sizing:border-box;
           border:none;
-          border-radius:4px;
+          border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
         }
 
 :is(:is(:is(:is(#editorSignatureParamsToolbar #addSignatureDoorHanger) .toolbarAddSignatureButtonContainer) .toolbarAddSignatureButton) > svg)  > path{
@@ -3805,7 +3805,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
             }
 
 :is(:is(:is(#editorSignatureParamsToolbar #addSignatureDoorHanger) .toolbarAddSignatureButtonContainer) .toolbarAddSignatureButton):is(:hover,:active) > svg{
-          border-radius:4px 0 0 4px;
+          border-radius:4px 0 0 4px; /* forsion-style: off (pdf.js viewer stylesheet) */
           background-color:var(--signature-hover-bg);
         }
 
@@ -3855,7 +3855,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
   margin-top:0;
   box-sizing:border-box;
 
-  border-radius:8px;
+  border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
 }
 
 #commentManagerDialog{
@@ -4017,7 +4017,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
     width:var(--comment-button-dim);
     height:var(--comment-button-dim);
     background-color:var(--comment-button-bg);
-    border-radius:6px 6px 6px 0;
+    border-radius:6px 6px 6px 0; /* forsion-style: off (pdf.js viewer stylesheet) */
     border:1px solid var(--comment-button-border-color);
     box-shadow:var(--comment-button-box-shadow);
     cursor:auto;
@@ -4029,7 +4029,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
   }
 
 [dir="rtl"] :is(:is(.annotationLayer,.annotationEditorLayer) .annotationCommentButton){
-      border-radius:6px 6px 0;
+      border-radius:6px 6px 0; /* forsion-style: off (pdf.js viewer stylesheet) */
     }
 
 :is(:is(.annotationLayer,.annotationEditorLayer) .annotationCommentButton)::before{
@@ -4284,7 +4284,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
 
 :is(:is(#editorCommentsSidebar #editorCommentsSidebarHeader) .commentCount) #editorCommentsSidebarCount{
         padding:0 4px;
-        border-radius:4px;
+        border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
         background-color:var(--comment-count-bg-color);
 
         color:var(--comment-fg-color);
@@ -4301,7 +4301,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
       width:32px;
       height:32px;
       padding:8px;
-      border-radius:4px;
+      border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
       border:var(--button-comment-border);
       background-color:var(--button-comment-bg);
       cursor:pointer;
@@ -4373,7 +4373,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
         align-self:stretch;
         gap:4px;
 
-        border-radius:8px;
+        border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
         border:0.5px solid var(--comment-border-color);
         background-color:var(--comment-bg-color);
       }
@@ -4643,7 +4643,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
         height:32px;
         padding:8px;
         border:var(--button-comment-border);
-        border-radius:4px;
+        border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
         background-color:var(--button-comment-bg);
         color:var(--button-comment-color);
       }
@@ -4995,7 +4995,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
     inset-inline-end:0;
     inset-block-start:calc(100% + var(--editor-toolbar-vert-offset));
 
-    border-radius:6px;
+    border-radius:6px; /* forsion-style: off (pdf.js viewer stylesheet) */
     background-color:var(--editor-toolbar-bg-color);
     border:1px solid var(--editor-toolbar-border-color);
     box-shadow:var(--editor-toolbar-shadow);
@@ -5971,7 +5971,7 @@ pdfjs-views-manager-waiting-for-file = Uploading file\u2026`)}},N5=1e3,Lu=50,Lm=
             flex-direction:column;
             gap:11px;
             padding-block:8px;
-            border-radius:6px;
+            border-radius:6px; /* forsion-style: off (pdf.js viewer stylesheet) */
             background-color:var(--editor-toolbar-bg-color);
             border:1px solid var(--editor-toolbar-border-color);
             box-shadow:var(--editor-toolbar-shadow);
@@ -6358,7 +6358,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
   background:var(--menu-bg);
   background-blend-mode:var(--menu-background-blend-mode);
   box-shadow:var(--menu-box-shadow);
-  border-radius:6px;
+  border-radius:6px; /* forsion-style: off (pdf.js viewer stylesheet) */
   border:1px solid var(--menu-border-color);
   -webkit-backdrop-filter:var(--menu-backdrop-filter);
           backdrop-filter:var(--menu-backdrop-filter);
@@ -6950,7 +6950,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 #viewsManager .viewsManagerButton{
     width:auto;
     color:var(--button-fg);
-    border-radius:8px;
+    border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
     border:1px solid var(--button-border-color);
     background:var(--button-bg);
   }
@@ -6985,7 +6985,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
       width:26px;
       height:26px;
       padding:4px;
-      border-radius:8px;
+      border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
       background:none;
     }
 
@@ -7414,7 +7414,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
             display:flex;
             justify-content:center;
             align-items:center;
-            border-radius:16px;
+            border-radius:16px; /* forsion-style: off (pdf.js viewer stylesheet) */
             min-height:24px;
             padding:4px 16px;
 
@@ -7461,7 +7461,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 
 :is(:is(:is(#viewsManager #viewsManagerContent) #thumbnailsView) > .thumbnail):not(.isDragging) > .thumbnailImageContainer::after{
           content:attr(page-number);
-          border-radius:8px;
+          border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
           border:1px solid var(--image-page-number-border-color);
           background-color:var(--image-page-number-bg);
           color:var(--image-page-number-fg);
@@ -7508,7 +7508,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 
           width:var(--thumbnail-width);
           border:none;
-          border-radius:8px;
+          border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
           box-shadow:var(--image-shadow);
           box-sizing:content-box;
           outline:var(--image-outline);
@@ -7522,7 +7522,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
             width:100%;
             height:100%;
             border:none;
-            border-radius:8px;
+            border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
             outline:none;
             -webkit-user-select:none;
                -moz-user-select:none;
@@ -7655,7 +7655,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 
                 width:var(--thumbnail-width);
                 border:none;
-                border-radius:8px;
+                border-radius:8px; /* forsion-style: off (pdf.js viewer stylesheet) */
                 box-sizing:content-box;
                 outline:none;
                 -webkit-user-select:none;
@@ -7665,7 +7665,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 
 .draggingThumbnail.multiple:is(:is(:is(:is(#viewsManager #viewsManagerContent) #thumbnailsView) > .thumbnail) > .thumbnailImageContainer)::after{
                 content:attr(data-multiple-count);
-                border-radius:calc(8px * var(--thumbnail-dragging-scale));
+                border-radius:calc(8px * var(--thumbnail-dragging-scale)); /* forsion-style: off (pdf.js viewer stylesheet) */
                 background-color:var(--multiple-dragging-indicator-bg);
                 color:var(--multiple-dragging-text-color);
                 position:absolute;
@@ -7936,7 +7936,7 @@ button.hasPopupMenu[aria-expanded="false"] + menu{
 .newBadge{
   background-color:var(--new-badge-bg);
   color:var(--new-badge-color);
-  border-radius:4px;
+  border-radius:4px; /* forsion-style: off (pdf.js viewer stylesheet) */
   border:1px solid var(--new-badge-border-color);
   padding-inline:4px;
   margin-inline:4px;
