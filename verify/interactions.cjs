@@ -200,7 +200,7 @@ async function main() {
 
       await button('shape').click()
       await win.locator('.pr-root.pr-inking .pr-board canvas').first().waitFor({ state: 'visible' })
-      await draw()
+      const shapePoint = await draw()
       const olderShape = (await until(() => shapes()[0]))?.id
       await button('highlight').click()
       await dragSelect(win, S1)
@@ -214,6 +214,24 @@ async function main() {
       await redo()
       await until(() => byId(first.id)?.color === '#2ea8e5', 2500)
       record('Redo restores the highlight, original ID and chosen color', removed && byId(first.id)?.color === '#2ea8e5' && await win.locator('.pr-hl[data-a]').count() > 0)
+
+      const shapeX = () => shapes().find(shape => shape.id === olderShape)?.x
+      const initialX = shapeX()
+      await win.mouse.click(shapePoint.x + 50, shapePoint.y)
+      await action('more').waitFor({ state: 'visible', timeout: 5000 })
+      await win.keyboard.press('ArrowRight')
+      const moved = await until(() => shapeX() > initialX, 2500)
+      await undo()
+      await until(() => shapeX() === initialX, 2500)
+      record('A later keyboard shape move is undone before the highlight', moved && shapeX() === initialX && !!byId(first.id))
+      await undo()
+      await until(() => !byId(first.id), 2500)
+      await redo()
+      await until(() => byId(first.id), 2500)
+      record('Redo restores the highlight before the later keyboard shape move', !!byId(first.id) && shapeX() === initialX)
+      await redo()
+      await until(() => shapeX() > initialX, 2500)
+      record('Redo also restores the later keyboard shape move', shapeX() > initialX)
 
       await button('underline').click()
       await dragSelect(win, S2)
@@ -258,7 +276,6 @@ async function main() {
       await card.locator('.pr-taginput').fill('review')
       await card.locator('.pr-taginput').press('Enter')
       await until(() => byId(first.id)?.tags?.includes('review'))
-      await focusReader()
       await undo()
       await until(() => !byId(first.id)?.tags?.length, 2500)
       record('Undo removes an added annotation tag', !byId(first.id)?.tags?.length)

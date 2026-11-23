@@ -196,6 +196,9 @@ export class Reader {
   private heldTool: Tool | null = null
   private log: Step[] = []
   private redoLog: Step[] = []
+  private historyQueue: Promise<void> | null = null
+  private historyRevision = 0
+  private boardKeyStep: ReturnType<typeof setTimeout> | null = null
   private draftText: string | null = null
   private commentEdit: { id: string; before: string | undefined; after: string | undefined } | null = null
   /** 正按着的这一下(选择工具下的点选 / 框选、橡皮)。只认按下的那一个指针。 */
@@ -1015,6 +1018,7 @@ export class Reader {
    *  ponytail: 白板的撤销栈是引擎自己的,我们只记「这一手动没动过它」、撤销时叫它退一步;引擎不经指针和删除键的改动
    *  (方向键挪动之类)不在这本账上,混着撤销时先后可能差一步,不会丢东西。要逐条对上得等宿主把引擎的历史露出来。 */
   private recordStep(step: Step): void {
+    this.historyRevision++
     this.log.push(step)
     this.redoLog.length = 0
     this.redoCut = !step.board
@@ -1088,28 +1092,61 @@ export class Reader {
     this.closePop()
     if (document.activeElement?.closest('.pr-marks')) this.container.focus({ preventScroll: true })
   }
-  undo(): void {
-    this.prepareHistoryAction()
-    const s = this.log.pop()
-    if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'before')
-    // Capture the current record so redo restores any edits made since creation.
-    if (s?.created?.length) s.created = this.removeAnnotations(s.created.map(a => a.id))
-    if (s?.removed?.length) this.doc?.restore(s.removed)
-    if (s?.annotationEdit && !this.applyAnnotationEdit(s.annotationEdit, 'before')) s.annotationEdit = undefined
-    if (s?.ink?.length) this.ink?.putBack(s.ink)
-    if (!s || s.board) this.ink?.undo()
-    if (s) this.redoLog.push(s)
+  undo(): void { this.changeHistory('before') }
+  redo(): void { this.changeHistory('after') }
+
+  private changeHistory(side: 'before' | 'after'): void {
+    const run = () => this.replayHistory(side)
+    const queued = this.historyQueue ? this.historyQueue.then(run) : run()
+    if (!queued) return
+    const done = queued.finally(() => { if (this.historyQueue === done) this.historyQueue = null })
+    this.historyQueue = done
   }
-  redo(): void {
+
+  private replayHistory(side: 'before' | 'after'): void | Promise<void> {
+    if (this.dead) return
     this.prepareHistoryAction()
-    const s = this.redoLog.pop()
-    if (s?.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, 'after')
-    if (s?.created?.length) this.doc?.restore(s.created)
-    if (s?.removed?.length) s.removed = this.removeAnnotations(s.removed.map(a => a.id))
-    if (s?.annotationEdit && !this.applyAnnotationEdit(s.annotationEdit, 'after')) s.annotationEdit = undefined
-    if (s?.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
-    if (s ? s.board : !this.redoCut) this.ink?.redo()
-    if (s) this.log.push(s)
+    this.finishBoardKeyStep()
+    const undoing = side === 'before'
+    const from = undoing ? this.log : this.redoLog
+    const s = from.pop()
+    if (!s) {
+      if (undoing) this.ink?.undo()
+      else if (!this.redoCut) this.ink?.redo()
+      return
+    }
+
+    const revision = this.historyRevision
+    const apply = () => {
+      if (s.shapeEdits) this.ink?.applyShapeEdits(s.shapeEdits, side)
+      // Capture the current records so reversing removal restores any later edits.
+      if (undoing) {
+        if (s.created?.length) s.created = this.removeAnnotations(s.created.map(a => a.id))
+        if (s.removed?.length) this.doc?.restore(s.removed)
+        if (s.ink?.length) this.ink?.putBack(s.ink)
+        if (s.board) this.ink?.undo()
+      } else {
+        if (s.created?.length) this.doc?.restore(s.created)
+        if (s.removed?.length) s.removed = this.removeAnnotations(s.removed.map(a => a.id))
+        if (s.ink?.length) s.ink = this.ink?.drop(s.ink) ?? s.ink
+        if (s.board) this.ink?.redo()
+      }
+      if (s.annotationEdit && !this.applyAnnotationEdit(s.annotationEdit, side)) s.annotationEdit = undefined
+      if (!undoing || revision === this.historyRevision) (undoing ? this.redoLog : this.log).push(s)
+    }
+    if (this.doc && (s.created?.length || s.removed?.length || s.annotationEdit)) {
+      return this.doc.withLatestAnnotations(apply).then(didApply => {
+        if (!didApply && revision === this.historyRevision) from.push(s)
+      })
+    }
+    apply()
+  }
+
+  private finishBoardKeyStep(): void {
+    if (this.boardKeyStep === null) return
+    clearTimeout(this.boardKeyStep)
+    this.boardKeyStep = null
+    if (!this.dead) this.step([])
   }
 
   /** 白板重挂会丢弃它自己的历史，阅读器记录的操作继续有效。 */
@@ -1144,6 +1181,10 @@ export class Reader {
     // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
     if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin, .pr-mark-colors button')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if (this.onHistoryKey(ev)) return
+    if (k.startsWith('arrow') && this.ink?.owns(ev.target)) {
+      this.finishBoardKeyStep()
+      this.boardKeyStep = setTimeout(() => this.finishBoardKeyStep(), 0)
+    }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'a' || k === 'd' || k === 'v') && this.ink?.owns(ev.target)) this.ink.clearPickedTracking()
     if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && !ev.repeat && !ev.isComposing) {
       // 数字键不算抓手(和白板一样,1 是选择)
@@ -1387,8 +1428,10 @@ export class Reader {
     })
     const tagsBox = pop.querySelector<HTMLElement>('.pr-tags')!
     const drawTags = (): void => {
+      const restoreFocus = tagsBox.contains(document.activeElement)
       tagsBox.innerHTML = (a.tags ?? []).map((g, i) => `<button class="pr-tag" data-pop="untag" data-i="${i}" title="${esc(t('card.removeTag'))}">#${esc(g)}</button>`).join('') +
         `<button class="pr-tag add" data-pop="tag">${esc(t('card.addTag'))}</button>`
+      if (restoreFocus) tagsBox.querySelector<HTMLElement>('[data-pop="tag"]')?.focus({ preventScroll: true })
     }
     drawTags()
     pop.addEventListener('click', (e) => {
@@ -1915,6 +1958,7 @@ export class Reader {
     if (this.dead) return Promise.resolve()
     this.dead = true
     cancelAnimationFrame(this.selectionFrame)
+    this.finishBoardKeyStep()
     this.extension?.close()
     this.closePop()
     // 页面上正打着字的文字框:先收进数据再走。

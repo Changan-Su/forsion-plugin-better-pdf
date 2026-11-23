@@ -231,8 +231,8 @@ export class InkLayer {
   setShape(id: string): void { this.shape = id as HostBoardShape; if (this.shaping) { this.tool = this.shape; this.handle?.update({ tool: this.tool }) } }
   setColor(c: string): void { this.pref.color = c; this.handle?.update(this.style()) }
   setWidth(w: number): void { this.pref.width = w; this.handle?.update(this.style()) }
-  undo(): void { this.handle?.undo() }
-  redo(): void { this.handle?.redo() }
+  undo(): void { this.handle?.undo(); this.take() }
+  redo(): void { this.handle?.redo(); this.take() }
 
   // ── 每页一张静态 SVG ──
   onDocReady(): void { if (this.hasInk()) void this.enter() } // 静态图在各页渲染出来时画(onPageRendered)

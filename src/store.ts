@@ -170,6 +170,7 @@ export class AnnotDoc {
   private disk: string | null = null
   private warned = false
   private pendingRecolors = new Set<string>()
+  private historyWrites = 0
   readonly path: string
 
   private readonly sources = new Set<HostFileIO>()
@@ -235,35 +236,50 @@ export class AnnotDoc {
     return this.writing
   }
 
-  private async writeWithLock(): Promise<void> {
+  /** Resolve history against the latest sidecar inside the normal write queue. */
+  withLatestAnnotations(apply: () => void): Promise<boolean> {
+    let applied = false
+    this.historyWrites++
+    const task = this.writing.then(() => this.writeWithLock(() => {
+      apply()
+      applied = true
+    })).finally(() => { this.historyWrites-- })
+    this.writing = task
+    return task.then(() => applied)
+  }
+
+  private async writeWithLock(apply?: () => void): Promise<void> {
     try {
       const locks = globalThis.navigator?.locks
       if (locks) {
         const root = this.io ? 'external' : ctx.app.vaultRoot?.() ?? 'vault'
-        await locks.request(JSON.stringify(['better-pdf-sidecar', root, this.path]), () => this.write())
+        await locks.request(JSON.stringify(['better-pdf-sidecar', root, this.path]), () => this.write(apply))
         return
       }
     } catch {
       // Older and embedded hosts can deny Web Locks. Keep the read-before-write fallback.
     }
-    await this.write()
+    await this.write(apply)
   }
 
-  private async write(): Promise<void> {
-    if (!this.dirty || this.readonly) return
+  private async write(apply?: () => void): Promise<void> {
+    if (this.readonly) { apply?.(); return }
+    if (!this.dirty && !apply) return
     let savingRecolors: Set<string> | undefined
     try {
       // 写之前再读一遍:和上次不一样 = 别的窗口写过(或者上次没读到)→ 把那边的并进来再写,不整份盖掉。
       const current = await (this.io ?? ctx.app).readBytes!(this.path)
       const now = current ? dec.decode(current) : null
-      if (now != null && now !== this.disk) {
-        const theirs = parse(now)
+      if (now !== this.disk && (now != null || apply)) {
+        const theirs = now === null ? blank(this.data.fingerprint) : parse(now)
         if (!theirs) throw new Error('盘上的批注文件现在读不出来,不覆盖')
         if ((theirs.version ?? 1) > VERSION) { this.take(theirs); for (const cb of [...this.subs]) cb(); return }
         this.data = mergeSidecar(this.disk == null ? null : parse(this.disk), this.data, theirs, this.pendingRecolors)
         for (const cb of [...this.subs]) cb()
       }
       this.disk = now
+      apply?.()
+      if (!this.dirty) return
       if (now == null && isEmpty(this.data)) { this.dirty = false; this.pendingRecolors.clear(); return } // 没批注过的 PDF 不留空文件
       const text = JSON.stringify(this.data, null, 1)
       savingRecolors = this.pendingRecolors
@@ -274,8 +290,10 @@ export class AnnotDoc {
       this.warned = false
       if (!this.io) void remember(this.data.fingerprint, this.path)
     } catch (e) {
-      this.dirty = true
-      if (savingRecolors) for (const id of savingRecolors) this.pendingRecolors.add(id)
+      if (savingRecolors) {
+        this.dirty = true
+        for (const id of savingRecolors) this.pendingRecolors.add(id)
+      }
       console.error('[pdf-reader] 批注没能保存', e)
       if (!this.warned) { this.warned = true; ctx.notify?.(t('save.failed'), { level: 'error' }) }
     }
@@ -286,7 +304,7 @@ export class AnnotDoc {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     if (!this.dirty || this.readonly || (this.disk == null && isEmpty(this.data))) return
     // Run a pending recolor through the merge path, including when closing.
-    if (this.pendingRecolors.size) { void this.flush(); return }
+    if (this.pendingRecolors.size || this.historyWrites) { void this.flush(); return }
     const text = JSON.stringify(this.data, null, 1)
     this.dirty = false
     void (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text)).then(() => { this.disk = text }, () => { this.dirty = true })
