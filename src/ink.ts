@@ -171,6 +171,16 @@ export class InkLayer {
     this.applyShapeEdits(edits, 'after')
   }
 
+  nudgePicked(dx: number, dy: number): boolean {
+    const elements = (this.handle?.getScene().elements ?? []).filter(element => this.picked.has(element.id))
+    // Leave bound shapes to the native engine, which also moves their connectors.
+    if (!elements.length || this.r.doc?.readonly || elements.some(e => e.boundElements?.length || e.startBinding || e.endBinding)) return false
+    const edits = elements.map(({ id, x, y }) => ({ id, before: { x, y }, after: { x: x + dx, y: y + dy } }))
+    this.r.recordShapeEdit(edits)
+    this.applyShapeEdits(edits, 'after')
+    return true
+  }
+
   applyShapeEdits(edits: ShapeEdit[], direction: 'before' | 'after'): void {
     const byId = new Map(edits.map(edit => [edit.id, edit[direction]]))
     this.updateElements(e => byId.has(e.id) ? { ...e, ...byId.get(e.id) } : e)
@@ -231,8 +241,8 @@ export class InkLayer {
   setShape(id: string): void { this.shape = id as HostBoardShape; if (this.shaping) { this.tool = this.shape; this.handle?.update({ tool: this.tool }) } }
   setColor(c: string): void { this.pref.color = c; this.handle?.update(this.style()) }
   setWidth(w: number): void { this.pref.width = w; this.handle?.update(this.style()) }
-  undo(): void { this.handle?.undo() }
-  redo(): void { this.handle?.redo() }
+  undo(): void { this.handle?.undo(); this.take() }
+  redo(): void { this.handle?.redo(); this.take() }
 
   // ── 每页一张静态 SVG ──
   onDocReady(): void { if (this.hasInk()) void this.enter() } // 静态图在各页渲染出来时画(onPageRendered)

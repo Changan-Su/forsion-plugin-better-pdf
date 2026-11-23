@@ -12,7 +12,8 @@
 // GENESIS_DESKTOP / UI_ZOOM / CPU / HEAVY 同 ink-latency.cjs;ONLY= 只跑某些场景;EXTRA_CSS= 注入一段样式再量;PROFILE= 录这一场景的 CPU profile。
 // ⚠️ 笔迹色块是照真笔迹改了点位拼出来的,粗笔下它在白板层和静态图里的轮廓会差十几像素(真笔画只差 ~2px,11-16 实画验过),所以只用缺省粗细。结果打在终端,原始数据和每个场景的一张截图落 .shots/ink-follow/。
 const fs = require('fs'); const os = require('os'); const path = require('path')
-const { launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium, topSelf } = require('./ink-latency.cjs')
+const { DESK, launch, openRow, INSTALL, synthStrokes, sleep, q, r1, chromium, topSelf } = require('./ink-latency.cjs')
+const { findChromium } = require(path.join(DESK, 'scripts/lib/find-chromium.cjs'))
 const HERE = path.resolve(__dirname, '..')
 const OUT = process.env.OUT_DIR || path.join(HERE, '.shots', 'ink-follow'); fs.mkdirSync(OUT, { recursive: true })
 const HEAVY = Number(process.env.HEAVY ?? 600)
@@ -22,7 +23,7 @@ const SQ = { x: 72, y: 72, s: 30 }
 
 async function makePdf(file) {
   const para = '<p>Readers mark up documents all the time, and most of those marks are never looked at again. The point of a reading tool is to make the second visit cheap. '.repeat(4) + '</p>'
-  const b = await chromium.launch()
+  const b = await chromium.launch({ executablePath: findChromium() })
   try {
     const p = await b.newPage()
     await p.setContent(`<html><body style="font: 15px/1.7 Georgia, serif; margin: 0"><h1>Ink Fixture</h1>${para.repeat(3)}<div style="page-break-before: always;position:relative;height:40px"><div style="position:absolute;left:0;width:40px;height:40px;background:#0000ff"></div><div style="position:absolute;left:400px;width:40px;height:40px;background:#ff00ff"></div></div><h1 style="margin-top:30px">Two</h1>${para.repeat(4)}<h1 style="page-break-before: always">Three</h1>${para.repeat(4)}</body></html>`)

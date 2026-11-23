@@ -169,6 +169,78 @@ await t('两个窗口各开同一份 PDF:各写各的不互相盖,删掉的也�
   b.patch(b.data.annots[0].id, { comment: '改' }); await b.flush()
   A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text), ['乙'], '甲删掉的被乙带回来了')
 })
+await t('撤销创建再重做会保留另一窗口已写入的备注，尊重已删除的批注', async () => {
+  for (const deleted of [false, true]) {
+    const { files } = fakeHost()
+    const filename = '.Annotation History.pdf.annot.json'
+    const W1 = await load('src/store.ts'), W2 = await load('src/store.ts')
+    const reader = await W1.acquire('Annotation History.pdf', 'history')
+    const mark = reader.add(A1)
+    await reader.flush()
+    const other = await W2.acquire('Annotation History.pdf', 'history')
+    if (deleted) other.remove(mark.id)
+    else other.patch(mark.id, { comment: 'Saved in the second window', tags: ['review'] })
+    await other.flush()
+    let removed
+    const undo = reader.withLatestAnnotations(() => { removed = reader.removeMany([mark.id]) })
+    const redo = reader.withLatestAnnotations(() => { reader.restore(removed) })
+    A.deepEqual(await Promise.all([undo, redo]), [true, true])
+    const annots = saved(files, filename).annots
+    if (deleted) A.deepEqual(annots, [])
+    else {
+      A.equal(annots[0]?.id, mark.id)
+      A.equal(annots[0]?.comment, 'Saved in the second window')
+      A.deepEqual(annots[0]?.tags, ['review'])
+    }
+  }
+})
+await t('读取新磁盘状态失败时保留原文件并保留撤销重试机会', async () => {
+  const { files } = fakeHost()
+  const filename = '.History Failure.pdf.annot.json'
+  const S = await load('src/store.ts')
+  const reader = await S.acquire('History Failure.pdf', 'history-failure')
+  const mark = reader.add(A1)
+  await reader.flush()
+  const before = files.get(filename)
+  const undo = () => reader.withLatestAnnotations(() => { reader.removeMany([mark.id]) })
+  const readBytes = ctx.app.readBytes
+  ctx.app.readBytes = async () => null
+  A.equal(await undo(), false)
+  A.equal(reader.data.annots[0]?.id, mark.id)
+  A.equal(files.get(filename), before)
+  ctx.app.readBytes = readBytes
+  files.set(filename, enc.encode('{unreadable'))
+  A.equal(await undo(), false)
+  A.equal(reader.data.annots[0]?.id, mark.id)
+  reader.flushNow()
+  A.equal(dec.decode(files.get(filename)), '{unreadable')
+  files.set(filename, before)
+  A.equal(await undo(), true)
+  A.deepEqual(saved(files, filename).annots, [])
+})
+await t('等待读取历史时关闭，仍立即保存已有的批注编辑', async () => {
+  const { files } = fakeHost()
+  const filename = '.History Shutdown.pdf.annot.json'
+  const S = await load('src/store.ts')
+  const reader = await S.acquire('History Shutdown.pdf', 'history-shutdown')
+  const mark = reader.add(A1), other = reader.add({ ...A1, text: 'Other annotation' })
+  await reader.flush()
+  const readBytes = ctx.app.readBytes
+  const gate = Promise.withResolvers(), reading = Promise.withResolvers()
+  ctx.app.readBytes = async (...args) => {
+    reading.resolve()
+    await gate.promise
+    return readBytes(...args)
+  }
+  reader.patch(other.id, { comment: 'Keep this on close' })
+  const undo = reader.withLatestAnnotations(() => { reader.removeMany([mark.id]) })
+  await reading.promise
+  reader.flushNow()
+  A.equal(saved(files, filename).annots.find(a => a.id === other.id)?.comment, 'Keep this on close')
+  gate.resolve()
+  A.equal(await undo, true)
+  A.equal(saved(files, filename).annots.find(a => a.id === other.id)?.comment, 'Keep this on close')
+})
 await t('划线调色保留另一窗口的备注并尊重删除，跨页批注一起换色', async () => {
   for (const otherEdit of ['comment-first', 'comment-last', 'delete', 'delete-net-zero', 'delete-restore']) {
     const { files } = fakeHost()

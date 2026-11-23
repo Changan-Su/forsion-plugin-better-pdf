@@ -17,7 +17,8 @@ export const withShapeNote = (element: any, note: string): any => ({
   customData: { ...element.customData, betterPdfNote: note || undefined },
 })
 export type ShapeStyle = { strokeColor?: string; strokeWidth?: number; roundness?: { type: number } | null }
-export type ShapeEdit = { id: string; before: ShapeStyle; after: ShapeStyle }
+type ShapeChanges = ShapeStyle & { x?: number; y?: number }
+export type ShapeEdit = { id: string; before: ShapeChanges; after: ShapeChanges }
 
 
 /** Bounds of the rotated board frame, in page or scene units. */
