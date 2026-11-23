@@ -388,6 +388,8 @@ export class InkLayer {
   syncViewport(): void {
     if (!this.handle) return
     const v = this.viewport(), l = this.lastVp
+    // A background tab can lose its layout before its pending scroll callback runs.
+    if (![v.scrollX, v.scrollY, v.zoom].every(Number.isFinite) || v.zoom <= 0) return
     if (l && Math.abs(l.scrollX - v.scrollX) < 1e-6 && Math.abs(l.scrollY - v.scrollY) < 1e-6 && Math.abs(l.zoom - v.zoom) < 1e-9) return
     this.lastVp = v
     this.handle.update({ viewport: v })

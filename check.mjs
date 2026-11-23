@@ -170,7 +170,7 @@ await t('两个窗口各开同一份 PDF:各写各的不互相盖,删掉的也�
   A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text), ['乙'], '甲删掉的被乙带回来了')
 })
 await t('划线调色保留另一窗口的备注并尊重删除，跨页批注一起换色', async () => {
-  for (const otherEdit of ['comment-first', 'comment-last', 'delete']) {
+  for (const otherEdit of ['comment-first', 'comment-last', 'delete', 'delete-net-zero', 'delete-restore']) {
     const { files } = fakeHost()
     const filename = '.Markup.pdf.annot.json'
     const base = { ...A1, id: 'text-a', created: '2026-01-01', modified: '2026-01-01' }
@@ -180,16 +180,23 @@ await t('划线调色保留另一窗口的备注并尊重删除，跨页批注�
     const colors = await W1.acquire('Markup.pdf', 'markup'), other = await W2.acquire('Markup.pdf', 'markup')
     const recolor = async () => {
       A.equal(colors.recolor(new Set([base.id, secondPage.id]), '#2ea8e5'), true)
+      if (otherEdit === 'delete-net-zero') colors.recolor(new Set([base.id]), base.color)
+      if (otherEdit === 'delete-restore') colors.restore(colors.removeMany([base.id]))
+      colors.flushNow()
       await colors.flush()
     }
     if (otherEdit === 'comment-last') await recolor()
-    if (otherEdit === 'delete') other.remove(base.id)
-    else other.patch(base.id, { comment: 'Saved in the other reader' })
+    if (otherEdit.startsWith('delete')) other.remove(base.id)
+    else {
+      other.patch(base.id, { comment: 'Saved in the other reader' })
+      other.data.annots[0].modified = base.modified
+    }
     await other.flush()
     if (otherEdit !== 'comment-last') await recolor()
     const marks = saved(files, filename).annots
     A.equal(marks.find(a => a.id === secondPage.id)?.color, '#2ea8e5')
-    if (otherEdit === 'delete') A.equal(marks.some(a => a.id === base.id), false)
+    if (otherEdit === 'delete' || otherEdit === 'delete-net-zero') A.equal(marks.some(a => a.id === base.id), false)
+    else if (otherEdit === 'delete-restore') A.equal(marks.find(a => a.id === base.id)?.color, '#2ea8e5')
     else {
       const first = marks.find(a => a.id === base.id)
       A.equal(first.color, '#2ea8e5')
