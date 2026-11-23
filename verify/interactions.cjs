@@ -199,9 +199,9 @@ async function main() {
       }
 
       await button('shape').click()
+      await win.locator('.pr-root.pr-inking .pr-board canvas').first().waitFor({ state: 'visible' })
       await draw()
-      await until(() => shapes().length === 1)
-      const olderShape = shapes()[0].id
+      const olderShape = (await until(() => shapes()[0]))?.id
       await button('highlight').click()
       await dragSelect(win, S1)
       await palette().locator('[data-v="#2ea8e5"]').click()
@@ -210,7 +210,7 @@ async function main() {
       await undo()
       const removed = await until(() => !byId(first.id), 2500)
       record('Undo removes the entire newly drawn and recolored highlight', first.type === 'highlight' && removed && await win.locator('.pr-hl[data-a]').count() === 0)
-      record('Undo of a text mark preserves the earlier shape', shapes()[0]?.id === olderShape)
+      record('Undo of a text mark preserves the earlier shape', !!olderShape && shapes()[0]?.id === olderShape)
       await redo()
       await until(() => byId(first.id)?.color === '#2ea8e5', 2500)
       record('Redo restores the highlight, original ID and chosen color', removed && byId(first.id)?.color === '#2ea8e5' && await win.locator('.pr-hl[data-a]').count() > 0)

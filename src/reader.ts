@@ -235,7 +235,7 @@ export class Reader {
   private readonly off: (() => void)[] = []
   private pop: HTMLElement | null = null
   private hostPop: { dispose(): void } | null = null
-  private cardMd: { pop: HTMLElement; h: { dispose(): void } } | null = null
+  private cardMd: { pop: HTMLElement; h: { getValue(): string; dispose(): void } } | null = null
   private hostMenu: (() => void) | null = null
   /** 宿主的划线条(新宿主才有);没有就照旧自己画浮条 .pr-selpop。 */
   private readonly bar: HostSelectionBarHandle | null
@@ -1076,6 +1076,7 @@ export class Reader {
   }
 
   private finishCommentEdit(): void {
+    this.cardMd?.h.getValue() // Host editors flush composed text before a history step is recorded.
     const edit = this.commentEdit
     this.commentEdit = null
     if (edit && edit.before !== edit.after) {
@@ -1477,14 +1478,15 @@ export class Reader {
   /** 批注卡里的宿主编辑器跟着那张卡走:卡关了(不管谁关的)就卸掉。 */
   private dropCardMd(pop?: HTMLElement): void {
     if (!this.cardMd || (pop && this.cardMd.pop !== pop)) return
-    this.cardMd.h.dispose()
+    const { h } = this.cardMd
     this.cardMd = null
+    h.dispose()
   }
 
   closePop(): void {
-    this.finishCommentEdit()
     this.colorPop?.dispose(); this.colorPop = null
     this.dropCardMd()
+    this.finishCommentEdit()
     this.hideBar()
     const had = this.pop?.contains(document.activeElement)
     this.hostMenu?.(); this.hostMenu = null
