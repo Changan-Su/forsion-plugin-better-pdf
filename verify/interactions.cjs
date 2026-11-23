@@ -185,6 +185,52 @@ async function main() {
   }
   try {
     await boot()
+    if (process.env.ONLY === 'shift-wheel') {
+      const scroller = win.locator('.pr-container')
+      await win.locator('.pr-zoomsel').selectOption('3')
+      await win.waitForFunction(() => {
+        const el = document.querySelector('.pr-container')
+        return el.scrollWidth - el.clientWidth >= 400 && el.scrollHeight - el.clientHeight >= 400
+      })
+      const runWheel = async (dx, dy, axis, modifier) => {
+        await scroller.evaluate(el => { el.scrollTo(400, 400) })
+        const position = () => scroller.evaluate(el => ({ x: el.scrollLeft, y: el.scrollTop }))
+        const before = await position()
+        const box = await scroller.boundingBox()
+        await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        if (modifier) await win.keyboard.down(modifier)
+        try { await win.mouse.wheel(dx, dy) } finally { if (modifier) await win.keyboard.up(modifier) }
+        const moved = value => Math.abs(value[axis] - before[axis]) > 1
+        await until(async () => moved(await position()), 1000)
+        const after = await position()
+        const other = axis === 'x' ? 'y' : 'x'
+        return { ok: Math.sign(after[axis] - before[axis]) === Math.sign(axis === 'y' ? dy : dx || dy)
+          && Math.abs(after[other] - before[other]) <= 1, before, after }
+      }
+      for (const mode of ['hand', 'ink']) {
+        await button(mode).click()
+        if (mode === 'ink') await win.locator('.pr-root.pr-inking .pr-board canvas').first().waitFor({ state: 'visible' })
+        for (const [label, dx, dy, axis, modifier] of [
+          ['Shift + vertical wheel moves right', 0, 120, 'x', 'Shift'],
+          ['Shift + vertical wheel moves left', 0, -120, 'x', 'Shift'],
+          ['horizontal input moves right', 120, 0, 'x'],
+          ['ordinary wheel moves down', 0, 120, 'y'],
+        ]) {
+          const result = await runWheel(dx, dy, axis, modifier)
+          record(`${mode}: ${label}`, result.ok, result)
+        }
+      }
+      const page = win.locator('.pr-root .page').first()
+      const pageWidth = () => page.evaluate(el => el.offsetWidth)
+      const before = await pageWidth()
+      const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+      await win.keyboard.down(modifier)
+      try { await win.mouse.wheel(0, 120) } finally { await win.keyboard.up(modifier) }
+      record('ink: modified wheel still zooms the PDF', await until(async () => (await pageWidth()) < before, 1500))
+      record('no renderer page errors or PDF/plugin console errors', errors.length === 0, errors)
+      process.exitCode = fails.length ? 1 : 0
+      return
+    }
     if (process.env.ONLY === 'annotation-history') {
       const annots = () => read()?.annots ?? []
       const byId = id => annots().find(mark => mark.id === id)

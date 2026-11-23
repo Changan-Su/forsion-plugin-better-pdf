@@ -334,10 +334,7 @@ export class InkLayer {
     const h = this.handle = ctx.ui!.mountBoard!(this.board, {
       scene: { elements: this.sceneElements() }, viewport: this.viewport(), tool: this.tool, theme: 'light', ...this.style(),
       onChange: () => { this.dirty = true; this.schedule() }, // 落笔时每一帧都来:按着的时候不收,抬笔再收
-      onWheel: (ev) => {
-        if (ev.ctrlKey || ev.metaKey) r.onWheel(ev)
-        else { r.container.scrollBy(ev.deltaX, ev.deltaY); this.syncViewport() } // 同一拍就推,不等 scroll 事件(那要晚一帧)
-      },
+      onWheel: (ev) => r.onWheel(ev, true),
       // 引擎画出第一帧之后再把静态图换下去,中间不留一段两边都没有的空白。(用定时器不用 rAF:窗口不在前台时 rAF 不走。)
       onReady: () => setTimeout(() => { if (this.handle === h) r.root.classList.add('pr-inking') }, SETTLE),
     })
