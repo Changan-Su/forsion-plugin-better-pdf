@@ -39,6 +39,22 @@ export const TOOL_KEY: Record<string, string> = { select: 'V', highlight: 'H', u
 /** 调色盘之外、自己用取色器挑过的颜色:留最近三种,批注和手写共用。 */
 const HEX = /^#[0-9a-f]{6}$/
 const RECENT_KEY = 'forsion-pdf-reader.colors'
+const MARK_COLORS_KEY = 'forsion-pdf-reader.tool-colors'
+type TextMarkup = 'highlight' | 'underline' | 'strike'
+const isTextMarkup = (type: unknown): type is TextMarkup => type === 'highlight' || type === 'underline' || type === 'strike'
+let toolColors = markColors(null)
+let storedToolColors: string | null | undefined
+function readToolColors(): boolean {
+  try {
+    const stored = localStorage.getItem(MARK_COLORS_KEY)
+    if (stored !== storedToolColors) {
+      toolColors = markColors(JSON.parse(stored ?? 'null'))
+      storedToolColors = stored
+    }
+    return true
+  } catch { return false }
+}
+readToolColors()
 let recent: string[] = []
 try { recent = (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') as unknown[]).filter((c): c is string => typeof c === 'string' && HEX.test(c)).slice(0, 3) } catch { /* 读不出来就当没挑过 */ }
 function remember(c: string): void {
@@ -84,6 +100,12 @@ const setActive = (r: Reader | null): void => {
   for (const cb of [...activeSubs]) cb()
 }
 export const allReaders = (): Reader[] => [...readers]
+
+export function syncMarkColors(event: StorageEvent): void {
+  if ((event.key === MARK_COLORS_KEY || event.key === null) && readToolColors()) {
+    for (const reader of readers) reader.refreshMarkColor()
+  }
+}
 
 /** 右栏的对话视图挂上之后登记在这里,「问 Tangu」经 quote 把引文递给它(owner 只用来认「是不是还是我登记的那一份」)。 */
 export const chat: { owner: HostChatMount | null; folder: string | null; quote: ((text: string) => void) | null } = { owner: null, folder: null, quote: null }
@@ -180,15 +202,23 @@ export class Reader {
   private lastTap = 0
   /** 笔尾橡皮刚记过一手:引擎不知道这一手,它那边旧的「重做」还留着。账上没得重做时别再去叫引擎重做(会把早先撤销掉的东西翻回来)。 */
   private redoCut = false
-  private readonly colors = (() => { try { return markColors(JSON.parse(localStorage.getItem('forsion-pdf-reader.tool-colors') ?? 'null')) } catch { return markColors(null) } })()
   private colorPop: { dispose(): void } | null = null
-  private get color(): string { return this.colors[this.colorTool()] }
+  private get color(): string { return toolColors[this.colorTool()] }
   private set color(value: string) { this.setMarkColor(this.colorTool(), value) }
   private colorTool(): MarkTool { return COLOR_TOOLS.includes(this.tool) ? this.tool as MarkTool : 'highlight' }
   private setMarkColor(tool: MarkTool, value: string): void {
     if (!HEX.test(value)) return
-    this.colors[tool] = value
-    try { localStorage.setItem('forsion-pdf-reader.tool-colors', JSON.stringify(this.colors)) } catch { /* Keep the in-memory preference. */ }
+    const readable = readToolColors()
+    toolColors[tool] = value
+    if (readable) try {
+      const stored = JSON.stringify(toolColors)
+      localStorage.setItem(MARK_COLORS_KEY, stored)
+      storedToolColors = stored
+    } catch { /* Keep the in-memory preference. */ }
+    for (const reader of readers) reader.refreshMarkColor()
+  }
+  refreshMarkColor(): void {
+    this.q('[data-act="tool-color"] .pr-color-current')?.style.setProperty('--c', this.color)
   }
   private dead = false
   private loading: Promise<void> = Promise.resolve()
@@ -413,6 +443,7 @@ export class Reader {
     }, { capture: true })
     on(this.root, 'focusin', () => setActive(this))
     on(document, 'pointerdown', (ev: PointerEvent) => {
+      if (this.pop?.dataset.kind === 'mark-color' && !this.pop.contains(ev.target as Node)) this.closePop()
       if (!(ev.target as HTMLElement).closest?.('.pr-shape-ui')) this.shapeActions.closePanel()
     }, { capture: true })
     on(this.root, 'keydown', (ev: KeyboardEvent) => this.onKey(ev))
@@ -607,7 +638,7 @@ export class Reader {
     const own = [...new Set([...(current && HEX.test(current) ? [current] : []), ...recent])].filter((c) => !colors.includes(c)).slice(0, 3)
     const custom = esc(t('tool.customColor'))
     return `<span class="pr-dots" role="group" aria-label="${esc(t('tool.color'))}">${[...colors, ...own].map((c) =>
-      `<button class="pr-dot${c === current ? ' on' : ''}" data-act="${act}" data-v="${c}" style="--c:${c}" title="${c}" aria-label="${c}"></button>`).join('')}` +
+      `<button class="pr-dot${c === current ? ' on' : ''}" data-act="${act}" data-v="${c}" style="--c:${c}" title="${c}" aria-label="${c}" aria-pressed="${c === current}"></button>`).join('')}` +
       `<label class="pr-dot pr-custom" title="${custom}"><input type="color" data-color="${act}" value="${own[0] ?? colors[0]}" aria-label="${custom}"></label></span>`
   }
 
@@ -679,23 +710,27 @@ export class Reader {
       { label: t('tool.kept'), icon: 'lock', run: () => this.setTool(tool, true) },
     ], { onClose: () => { this.hostMenu = null } })
   }
+  private bindPalette(palette: HTMLElement, pick: (color: string) => void): void {
+    palette.addEventListener('pointerdown', event => event.preventDefault())
+    palette.addEventListener('click', event => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>('[data-act="palette"]')
+      if (button?.dataset.v) pick(button.dataset.v)
+    })
+    palette.addEventListener('change', event => {
+      const input = event.target as HTMLInputElement
+      if (!input.matches('input[type="color"]')) return
+      event.stopPropagation()
+      remember(input.value)
+      pick(input.value)
+    })
+  }
+
   private openColors(anchor: HTMLElement, current: string, pick: (color: string) => void): void {
     this.colorPop?.dispose()
     const mount = (box: HTMLElement): (() => void) => {
       const palette = el(`<div class="pr-pop pr-color-menu" data-hosted>${this.dotsHtml(current, 'palette')}</div>`)
       box.append(palette)
-      const click = (event: Event): void => {
-        const button = (event.target as HTMLElement).closest<HTMLElement>('[data-act="palette"]')
-        if (!button?.dataset.v) return
-        pick(button.dataset.v); this.colorPop?.dispose(); this.colorPop = null
-      }
-      const change = (event: Event): void => {
-        const input = event.target as HTMLInputElement
-        if (!input.matches('input[type="color"]')) return
-        remember(input.value); pick(input.value); this.colorPop?.dispose(); this.colorPop = null
-      }
-      palette.addEventListener('pointerdown', event => event.preventDefault())
-      palette.addEventListener('click', click); palette.addEventListener('change', change)
+      this.bindPalette(palette, c => { pick(c); this.colorPop?.dispose(); this.colorPop = null })
       return () => palette.remove()
     }
     if (ctx.ui?.popover) {
@@ -707,13 +742,13 @@ export class Reader {
       this.colorPop = { dispose: () => { box.remove(); if (this.pop === box) this.pop = null } }
     }
   }
-  private openSelectionColors(type: 'highlight' | 'underline' | 'strike', anchor: HTMLElement): void {
+  private openSelectionColors(type: TextMarkup, anchor: HTMLElement): void {
     const pages = selectionToQuads(this.viewer), text = this.selText()
-    this.openColors(anchor, this.colors[type], c => { this.setMarkColor(type, c); this.markSelection(type, pages, text); this.renderToolbar() })
+    this.openColors(anchor, toolColors[type], c => { this.setMarkColor(type, c); this.markSelection(type, pages, text) })
   }
 
   private pickColor(c: string, from: HTMLElement): void {
-    // 浮条 / 批注卡里的色点有自己的含义(给选区上色、给这条批注换色),工具栏上的才是「当前颜色」。
+    // 在选区浮条上选色会创建批注，批注卡内选色会更新已有批注。
     if (from.dataset.color === 'sel') { // 宿主划线条那一格替它点开的取色器:落在打开时的那段选区上,作废了就不落
       const p = this.pendingPick
       this.pendingPick = null
@@ -723,8 +758,10 @@ export class Reader {
     const kind = from.closest<HTMLElement>('.pr-pop')?.dataset.kind
     if (kind === 'sel') { this.color = c; this.markSelection('highlight'); this.renderToolbar(); return }
     if (kind === 'card') {
-      if (!this.selected) return
-      this.doc?.patch(this.selected, { color: c })
+      const a = this.doc?.data.annots.find(annot => annot.id === this.selected)
+      if (!a) return
+      this.doc?.patch(a.id, { color: c })
+      if (isTextMarkup(a.type)) this.setMarkColor(a.type, c)
       this.pop?.querySelector<HTMLElement>('.pr-color-current')?.style.setProperty('--c', c)
       // 重画这一排:刚用取色器挑的那种原来不在里面。被点的那颗跟着换掉了,键盘焦点还给新的那颗(不然掉到 body 上,Esc、撤销没人听)。
       const dots = this.pop!.querySelector('.pr-dots')!, had = dots.contains(document.activeElement)
@@ -802,7 +839,7 @@ export class Reader {
 
   // ── 一次按下到抬起:手写笔模式、橡皮擦批注、点选 / 框选、记撤销 ─────────────────────────
   private onPressDown(ev: PointerEvent): void {
-    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar, .pr-shape-ui, .pr-shape-pin')) return // 浮在页面上的几块不是页面
+    if ((ev.target as HTMLElement).closest?.('.pr-toolbar, .pr-findbar, .pr-bottombar, .pr-shape-ui, .pr-shape-pin, .pr-mark-colors')) return // 浮在页面上的几块不是页面
     // 抓手:中键随时都是;抓手工具和按住空格时左键也是。按钮、浮层、输入框照常点。
     // 在视口的捕获阶段拦下,页面(选字、便签)和白板层(画)都收不到这一下。
     const grab = ev.button === 1 || (ev.button === 0 && (this.tool === 'hand' || this.spaceHeld))
@@ -1059,7 +1096,7 @@ export class Reader {
     const sel = window.getSelection()
     const inside = sel && !sel.isCollapsed && sel.anchorNode && this.container.contains(sel.anchorNode) && (sel.anchorNode.parentElement?.closest('.textLayer'))
     if (!inside) { if (this.pop?.dataset.kind === 'sel') this.closePop(); this.hideBar(); return }
-    if (this.tool === 'highlight' || this.tool === 'underline') { this.markSelection(this.tool); return }
+    if (this.tool === 'highlight' || this.tool === 'underline') { this.markWithPalette(this.tool); return }
     if (this.tool !== 'select') return
     const rects = selectedTextRects(this.container)
     if (!rects.length) return
@@ -1073,9 +1110,10 @@ export class Reader {
       const act = (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')?.dataset.pop
       if (!act) return
       const text = this.selText()
-      if (act.endsWith('-color')) this.openSelectionColors(act.replace('-color', '') as 'highlight' | 'underline' | 'strike', (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')!)
-      else if (act === 'highlight' || act === 'underline' || act === 'strike') this.markSelection(act)
-      else if (act === 'comment') { const a = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } }
+      const colorTool = act.endsWith('-color') ? act.slice(0, -6) : null
+      if (isTextMarkup(colorTool)) this.openSelectionColors(colorTool, (e.target as HTMLElement).closest<HTMLElement>('[data-pop]')!)
+      else if (isTextMarkup(act)) this.markWithPalette(act)
+      else if (act === 'comment') { const [a] = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } }
       else if (act === 'copy') { void navigator.clipboard?.writeText(text); ctx.notify?.(t('copy.done')); this.closePop() }
       else if (act === 'cite') { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text }); this.closePop() }
       else if (act === 'ask') { this.ask(text, this.page); this.closePop() }
@@ -1088,8 +1126,8 @@ export class Reader {
   private barTools(): HostSelectionBarTool[] {
     return [
       ...(['highlight', 'underline', 'strike'] as const).map(type => ({ id: type, title: t(`tool.${type}`), icon: type === 'highlight' ? 'highlighter' : type === 'underline' ? 'underline' : 'strikethrough',
-        run: () => { this.markSelection(type) }, menu: { title: t('tool.color'), open: (_selection: HostSelectionBarSelection, anchor: HTMLElement) => this.openSelectionColors(type, anchor) } })),
-      { id: 'comment', title: t('sel.comment'), icon: 'annotate', run: () => { const a = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } } },
+        run: () => { this.markWithPalette(type) }, menu: { title: t('tool.color'), open: (_selection: HostSelectionBarSelection, anchor: HTMLElement) => this.openSelectionColors(type, anchor) } })),
+      { id: 'comment', title: t('sel.comment'), icon: 'annotate', run: () => { const [a] = this.markSelection('highlight'); if (a) { this.select(a.id); this.openCard(a.id, true) } } },
       { id: 'copy', title: t('sel.copy'), icon: 'copy', run: () => { void navigator.clipboard?.writeText(this.selText()); ctx.notify?.(t('copy.done')); this.closePop() } },
       { id: 'cite', title: t('sel.cite'), icon: 'cite', run: () => { this.cite({ page: selectionToQuads(this.viewer)[0]?.page ?? this.page - 1, text: this.selText() }); this.closePop() } },
     ]
@@ -1152,19 +1190,37 @@ export class Reader {
     }
   }
 
-  /** 把当前选区变成一条(跨页则每页一条)批注,返回第一条。 */
-  private markSelection(type: 'highlight' | 'underline' | 'strike', pages = selectionToQuads(this.viewer), text = this.selText()): Annot | null {
-    if (!this.doc) return null
-    let first: Annot | null = null
-    for (const p of pages) {
-      const a = this.doc.add({ type, page: p.page, color: this.colors[type], quads: p.quads, text: first ? '' : text })
-      first ??= a
-    }
+  private markWithPalette(type: TextMarkup): void {
+    const doc = this.doc
+    if (!doc) return
+    const selection = window.getSelection()
+    const anchor = selection?.rangeCount ? selectionAnchor(this.container, selection.getRangeAt(0)) : null
+    const marks = this.markSelection(type)
+    if (!marks.length || !anchor) return
+    const palette = el(`<div class="pr-pop pr-color-menu pr-mark-colors" data-kind="mark-color" role="group" aria-label="${esc(t(`tool.${type}`))}">
+      <span class="pr-mark-color-kind" aria-hidden="true">${icon(KIND_ICON[type], 15)}</span>${this.dotsHtml(marks[0].color, 'palette')}
+    </div>`)
+    const ids = new Set(marks.map(mark => mark.id))
+    this.bindPalette(palette, color => {
+      const present = doc.data.annots.filter(mark => ids.has(mark.id))
+      for (const mark of present) doc.patch(mark.id, { color })
+      if (present.length) this.setMarkColor(type, color)
+      this.closePop()
+    })
+    this.showPop(palette, { ...anchor, centerX: (anchor.left + anchor.right) / 2 }, 'above')
+    if (!this.root.contains(document.activeElement)) this.container.focus({ preventScroll: true })
+  }
+
+  /** 把当前选区变成批注，跨页时每页一条。 */
+  private markSelection(type: TextMarkup, pages = selectionToQuads(this.viewer), text = this.selText()): Annot[] {
+    const doc = this.doc
+    if (!doc) return []
+    const marks = pages.map((p, index) => doc.add({ type, page: p.page, color: toolColors[type], quads: p.quads, text: index === 0 ? text : '' }))
     window.getSelection()?.removeAllRanges()
     this.justMade = performance.now()
     this.closePop()
-    if (first && (type === 'highlight' || type === 'underline')) this.completeTool(type)
-    return first
+    if (marks.length && type !== 'strike') this.completeTool(type)
+    return marks
   }
 
   // ── 点批注 → 批注卡 ───────────────────────────────────────────────────────────────
@@ -1295,7 +1351,7 @@ export class Reader {
 
   // ── 浮层 ────────────────────────────────────────────────────────────────────────
   /** 浮层放进滚动容器里(跟着页面滚),位置由客户区坐标换成容器内容坐标;客户区像素先除掉界面的整体缩放。 */
-  private showPop(pop: HTMLElement, a: { left: number; top: number; bottom: number; element?: HTMLElement }, prefer: 'above' | 'below'): void {
+  private showPop(pop: HTMLElement, a: { left: number; top: number; bottom: number; element?: HTMLElement; centerX?: number }, prefer: 'above' | 'below'): void {
     this.closePop()
     if (ctx.ui?.popover && a.element) {
       this.pop = pop
@@ -1323,7 +1379,8 @@ export class Reader {
     c.append(pop)
     this.pop = pop
     const w = pop.offsetWidth, h = pop.offsetHeight
-    const x = Math.max(c.scrollLeft + 8, Math.min((a.left - cr.left) / z + c.scrollLeft - 2, c.scrollLeft + c.clientWidth - w - 8))
+    const anchorX = a.centerX === undefined ? (a.left - cr.left) / z - 2 : (a.centerX - cr.left) / z - w / 2
+    const x = Math.max(c.scrollLeft + 8, Math.min(anchorX + c.scrollLeft, c.scrollLeft + c.clientWidth - w - 8))
     const above = (a.top - cr.top) / z + c.scrollTop - h - 8, below = (a.bottom - cr.top) / z + c.scrollTop + 8
     const fitsAbove = above >= c.scrollTop + 4, fitsBelow = below + h <= c.scrollTop + c.clientHeight - 4
     const y = prefer === 'above' ? (fitsAbove || !fitsBelow ? above : below) : (fitsBelow || !fitsAbove ? below : above)

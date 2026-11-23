@@ -6,7 +6,7 @@
 // 装好就是空的:不带示例 PDF、不带演示批注。
 import css from './style.css'
 import { scopedViewerCss } from './pdf'
-import { allReaders, hasRight, mountReader, openPanel } from './reader'
+import { allReaders, hasRight, mountReader, openPanel, syncMarkColors } from './reader'
 import { mountAnnots, mountChat, mountOutline } from './panel'
 import { flushAll, flushAllNow } from './store'
 import { flushReadingPositions } from './readingPosition'
@@ -63,11 +63,13 @@ if (ctx.app.readBytes && ctx.app.writeBytes) {
     ctx.subscribeLocale?.(() => { for (const r of allReaders()) r.relocale() })
     window.addEventListener('pagehide', saveNow)
     window.addEventListener('blur', saveSoon)
+    window.addEventListener('storage', syncMarkColors)
     document.addEventListener('visibilitychange', saveSoon)
     dispose = () => {
       saveNow()
       window.removeEventListener('pagehide', saveNow)
       window.removeEventListener('blur', saveSoon)
+      window.removeEventListener('storage', syncMarkColors)
       document.removeEventListener('visibilitychange', saveSoon)
     }
   }
