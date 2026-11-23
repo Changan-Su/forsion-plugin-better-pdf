@@ -202,8 +202,14 @@ await t('读取新磁盘状态失败时保留原文件并保留撤销重试机�
   const mark = reader.add(A1)
   await reader.flush()
   const before = files.get(filename)
-  files.set(filename, enc.encode('{unreadable'))
   const undo = () => reader.withLatestAnnotations(() => { reader.removeMany([mark.id]) })
+  const readBytes = ctx.app.readBytes
+  ctx.app.readBytes = async () => null
+  A.equal(await undo(), false)
+  A.equal(reader.data.annots[0]?.id, mark.id)
+  A.equal(files.get(filename), before)
+  ctx.app.readBytes = readBytes
+  files.set(filename, enc.encode('{unreadable'))
   A.equal(await undo(), false)
   A.equal(reader.data.annots[0]?.id, mark.id)
   reader.flushNow()
@@ -211,6 +217,29 @@ await t('读取新磁盘状态失败时保留原文件并保留撤销重试机�
   files.set(filename, before)
   A.equal(await undo(), true)
   A.deepEqual(saved(files, filename).annots, [])
+})
+await t('等待读取历史时关闭，仍立即保存已有的批注编辑', async () => {
+  const { files } = fakeHost()
+  const filename = '.History Shutdown.pdf.annot.json'
+  const S = await load('src/store.ts')
+  const reader = await S.acquire('History Shutdown.pdf', 'history-shutdown')
+  const mark = reader.add(A1), other = reader.add({ ...A1, text: 'Other annotation' })
+  await reader.flush()
+  const readBytes = ctx.app.readBytes
+  const gate = Promise.withResolvers(), reading = Promise.withResolvers()
+  ctx.app.readBytes = async (...args) => {
+    reading.resolve()
+    await gate.promise
+    return readBytes(...args)
+  }
+  reader.patch(other.id, { comment: 'Keep this on close' })
+  const undo = reader.withLatestAnnotations(() => { reader.removeMany([mark.id]) })
+  await reading.promise
+  reader.flushNow()
+  A.equal(saved(files, filename).annots.find(a => a.id === other.id)?.comment, 'Keep this on close')
+  gate.resolve()
+  A.equal(await undo, true)
+  A.equal(saved(files, filename).annots.find(a => a.id === other.id)?.comment, 'Keep this on close')
 })
 await t('划线调色保留另一窗口的备注并尊重删除，跨页批注一起换色', async () => {
   for (const otherEdit of ['comment-first', 'comment-last', 'delete', 'delete-net-zero', 'delete-restore']) {

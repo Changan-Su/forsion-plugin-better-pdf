@@ -1181,8 +1181,15 @@ export class Reader {
     // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
     if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin, .pr-mark-colors button')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if (this.onHistoryKey(ev)) return
-    if (k.startsWith('arrow') && this.ink?.owns(ev.target)) {
+    if (k.startsWith('arrow') && (this.ink?.owns(ev.target) || this.ink?.selectedShapes().length)) {
       this.finishBoardKeyStep()
+      const dx = k === 'arrowright' ? 1 : k === 'arrowleft' ? -1 : 0
+      const dy = k === 'arrowdown' ? 1 : k === 'arrowup' ? -1 : 0
+      if ((dx || dy) && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey && this.ink?.nudgePicked(dx, dy)) {
+        ev.preventDefault()
+        ev.stopPropagation()
+        return
+      }
       this.boardKeyStep = setTimeout(() => this.finishBoardKeyStep(), 0)
     }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'a' || k === 'd' || k === 'v') && this.ink?.owns(ev.target)) this.ink.clearPickedTracking()
@@ -1427,8 +1434,7 @@ export class Reader {
       if (!cardBody.contains(event.relatedTarget as Node | null)) this.finishCommentEdit()
     })
     const tagsBox = pop.querySelector<HTMLElement>('.pr-tags')!
-    const drawTags = (): void => {
-      const restoreFocus = tagsBox.contains(document.activeElement)
+    const drawTags = (restoreFocus = false): void => {
       tagsBox.innerHTML = (a.tags ?? []).map((g, i) => `<button class="pr-tag" data-pop="untag" data-i="${i}" title="${esc(t('card.removeTag'))}">#${esc(g)}</button>`).join('') +
         `<button class="pr-tag add" data-pop="tag">${esc(t('card.addTag'))}</button>`
       if (restoreFocus) tagsBox.querySelector<HTMLElement>('[data-pop="tag"]')?.focus({ preventScroll: true })
@@ -1446,20 +1452,25 @@ export class Reader {
       }
       else if (act === 'cite') this.cite(a)
       else if (act === 'ask') this.ask([a.text, a.comment].filter(Boolean).join('\n\n'), a.page + 1)
-      else if (act === 'untag') { this.finishCommentEdit(); this.editAnnotation(a, 'tags', (a.tags ?? []).filter((_, i) => i !== Number(b.dataset.i))); drawTags() }
+      else if (act === 'untag') { this.finishCommentEdit(); this.editAnnotation(a, 'tags', (a.tags ?? []).filter((_, i) => i !== Number(b.dataset.i))); drawTags(true) }
       else if (act === 'tag') {
         const input = el<HTMLInputElement>(`<input class="pr-taginput" placeholder="${esc(t('card.tagPlaceholder'))}">`)
         b.replaceWith(input)
         input.focus()
         let closed = false
-        const done = (keep: boolean): void => {
+        const done = (keep: boolean, restoreFocus = false): void => {
           if (closed) return // 重画标签会把输入框摘掉,摘掉又触发一次失焦:只认第一次
           closed = true
           const v = input.value.trim().replace(/^#/, '')
           if (keep && v && !(a.tags ?? []).includes(v)) this.editAnnotation(a, 'tags', [...(a.tags ?? []), v])
-          drawTags()
+          drawTags(restoreFocus)
         }
-        input.addEventListener('keydown', (k) => { if (k.key === 'Enter') done(true); else if (k.key === 'Escape') { k.stopPropagation(); done(false) } })
+        input.addEventListener('keydown', (event) => {
+          if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
+          event.preventDefault()
+          event.stopPropagation()
+          done(event.key === 'Enter', true)
+        })
         input.addEventListener('blur', () => done(true))
       }
     })

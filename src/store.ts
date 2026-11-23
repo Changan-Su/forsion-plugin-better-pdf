@@ -170,7 +170,6 @@ export class AnnotDoc {
   private disk: string | null = null
   private warned = false
   private pendingRecolors = new Set<string>()
-  private historyWrites = 0
   readonly path: string
 
   private readonly sources = new Set<HostFileIO>()
@@ -239,11 +238,10 @@ export class AnnotDoc {
   /** Resolve history against the latest sidecar inside the normal write queue. */
   withLatestAnnotations(apply: () => void): Promise<boolean> {
     let applied = false
-    this.historyWrites++
     const task = this.writing.then(() => this.writeWithLock(() => {
       apply()
       applied = true
-    })).finally(() => { this.historyWrites-- })
+    }))
     this.writing = task
     return task.then(() => applied)
   }
@@ -270,8 +268,10 @@ export class AnnotDoc {
       // 写之前再读一遍:和上次不一样 = 别的窗口写过(或者上次没读到)→ 把那边的并进来再写,不整份盖掉。
       const current = await (this.io ?? ctx.app).readBytes!(this.path)
       const now = current ? dec.decode(current) : null
-      if (now !== this.disk && (now != null || apply)) {
-        const theirs = now === null ? blank(this.data.fingerprint) : parse(now)
+      // A missing response can also mean the host could not read a known file.
+      if (apply && now === null && this.disk !== null) throw new Error('批注文件暂时读不到，保留撤销记录')
+      if (now != null && now !== this.disk) {
+        const theirs = parse(now)
         if (!theirs) throw new Error('盘上的批注文件现在读不出来,不覆盖')
         if ((theirs.version ?? 1) > VERSION) { this.take(theirs); for (const cb of [...this.subs]) cb(); return }
         this.data = mergeSidecar(this.disk == null ? null : parse(this.disk), this.data, theirs, this.pendingRecolors)
@@ -304,7 +304,7 @@ export class AnnotDoc {
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     if (!this.dirty || this.readonly || (this.disk == null && isEmpty(this.data))) return
     // Run a pending recolor through the merge path, including when closing.
-    if (this.pendingRecolors.size || this.historyWrites) { void this.flush(); return }
+    if (this.pendingRecolors.size) { void this.flush(); return }
     const text = JSON.stringify(this.data, null, 1)
     this.dirty = false
     void (this.io ?? ctx.app).writeBytes!(this.path, enc.encode(text)).then(() => { this.disk = text }, () => { this.dirty = true })
