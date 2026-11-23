@@ -28,7 +28,7 @@
 .pr-palette {
   /* 居中用左右都贴满 + 自动外边距:写成 left:50% 再平移的话,可用宽度只剩一半,一排东西会被挤成三行 */
   position: absolute; top: calc(100% + 8px); left: 0; right: 0; margin: 0 auto; width: fit-content; max-width: 100%;
-  flex-wrap: wrap; justify-content: center; row-gap: 4px; padding: 3px 8px; border-radius: var(--radius-lg);
+  flex-wrap: wrap; justify-content: center; row-gap: 4px; padding: 3px 8px; border-radius: var(--radius-md);
 }
 .pr-palette > .pr-sep:first-child { display: none; }
 .pr-root:not([data-w]):has(.pr-findbar:not([hidden])) .pr-palette { top: calc(100% + 52px); }

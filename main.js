@@ -28,7 +28,7 @@
 .pr-palette {
   /* \u5C45\u4E2D\u7528\u5DE6\u53F3\u90FD\u8D34\u6EE1 + \u81EA\u52A8\u5916\u8FB9\u8DDD:\u5199\u6210 left:50% \u518D\u5E73\u79FB\u7684\u8BDD,\u53EF\u7528\u5BBD\u5EA6\u53EA\u5269\u4E00\u534A,\u4E00\u6392\u4E1C\u897F\u4F1A\u88AB\u6324\u6210\u4E09\u884C */
   position: absolute; top: calc(100% + 8px); left: 0; right: 0; margin: 0 auto; width: fit-content; max-width: 100%;
-  flex-wrap: wrap; justify-content: center; row-gap: 4px; padding: 3px 8px; border-radius: var(--radius-lg);
+  flex-wrap: wrap; justify-content: center; row-gap: 4px; padding: 3px 8px; border-radius: var(--radius-md);
 }
 .pr-palette > .pr-sep:first-child { display: none; }
 .pr-root:not([data-w]):has(.pr-findbar:not([hidden])) .pr-palette { top: calc(100% + 52px); }
