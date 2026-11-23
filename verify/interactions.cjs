@@ -185,6 +185,11 @@ async function main() {
   }
   try {
     await boot()
+    await win.evaluate(() => {
+      const key = 'forsion-pdf-reader.tool-colors'
+      localStorage.setItem(key, '{invalid')
+      window.dispatchEvent(new StorageEvent('storage', { key }))
+    })
     await dragSelect(win, S1)
     record('selection bar exposes three action/color split arrows', await win.locator(`${SELPOP} [data-menu-for]`).count() === 3)
     await win.locator(`${SELPOP} [data-act="underline"]`).click()
@@ -217,9 +222,15 @@ async function main() {
     const paletteBox = await palette().boundingBox()
     record('drag release anchors the palette above the new purple highlight', paletteBox.y + paletteBox.height < releaseLine.top && await paletteColor() === '#a28ae5')
     await win.screenshot({ path: path.join(SHOTS, 'after-mark-colors.png'), scale: 'css' })
-    await palette().locator('[data-v="#ffd400"]').click()
+    await palette().locator('[data-v="#ffd400"]').focus()
+    await win.keyboard.press('Space')
     await until(() => read()?.annots?.[2]?.color === '#ffd400')
-    record('choosing yellow recolors this mark and dismisses the palette', await palette().count() === 0 && read().annots.length === 3 && read().annots[2].color === '#ffd400')
+    record('Space on the yellow swatch recolors this mark and dismisses the palette', await palette().count() === 0 && read().annots.length === 3 && read().annots[2].color === '#ffd400')
+    const persisted = await win.evaluate(() => {
+      const key = 'forsion-pdf-reader.tool-colors'
+      return [localStorage.getItem(key), localStorage.getItem(key + '.highlight')]
+    })
+    record('a damaged legacy preference is retained and the new color is saved independently', persisted[0] === '{invalid' && persisted[1] === '#ffd400')
     await button('highlight').dblclick(); await dragSelect(win, S1)
     await until(() => read()?.annots?.length === 4)
     record('double-click keeps the tool without creating an extra mark', await tool() === 'highlight' && read().annots.length === 4 && await win.locator('.pr-toolbar [data-act="tool-menu"].on').count() === 1, { tool: await tool(), annots: read().annots.length, locked: await win.locator('.pr-toolbar [data-act="tool-menu"].on').count() })
@@ -416,16 +427,17 @@ async function main() {
       const activeReader = win.locator('.pr-root:visible:not([inert])')
       await activeReader.evaluate(el => { el.dataset.originalReader = '' })
       const fileRow = win.locator('.t2s-srow').filter({ has: win.locator('.t2s-srow-title', { hasText: out }) }).first()
-      await fileRow.click()
-      await win.waitForSelector('.pr-root:visible .textLayer span', { timeout: 15000 }); await win.waitForTimeout(500)
+      await fileRow.click({ modifiers: ['ControlOrMeta'] })
+      await win.locator('.dv-tab', { has: win.getByText(out, { exact: true }) }).click()
+      await activeReader.locator('.textLayer span').first().waitFor({ timeout: 15000 })
       await win.screenshot({ path: path.join(SHOTS, 'exported.png') })
       record('exported PDF opens independently without a sidecar overlay', await win.locator('.pr-root:visible .page canvas').count() > 0 && !fs.existsSync(path.join(vault, FOLDER, `.${out}.annot.json`)))
       const highlighter = activeReader.locator('[data-act="tool"][data-v="highlight"]')
       await highlighter.click()
       await activeReader.locator('[data-act="tool-color"]').click()
       await win.locator('.pr-color-menu [data-v="#5fb236"]').click()
-      await win.locator('.t2s-srow', { has: win.getByText(PDF, { exact: true }) }).click()
-      await win.locator('.pr-root[data-original-reader]:not([inert])').waitFor({ state: 'visible' })
+      await win.locator('.dv-tab', { has: win.getByText(PDF, { exact: true }) }).click()
+      await win.locator('.pr-root[data-original-reader]:not([inert])').waitFor({ state: 'visible', timeout: 5000 })
       await highlighter.click()
       record('the already-open PDF uses the color updated in the second PDF', await activeReader.getAttribute('data-original-reader') === ''
         && await activeReader.locator('.pr-toolbar .pr-color-current').evaluate(el => el.style.getPropertyValue('--c')) === '#5fb236')

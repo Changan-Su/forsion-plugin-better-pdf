@@ -1,7 +1,7 @@
 // 一份打开着的 PDF:pdf.js 渲染 + 一条工具栏 + 页面上的批注层 + 选中浮条 / 批注卡。
 // 批注列表、大纲、对话在宿主的右栏里(panel.ts),经 getActive()/subscribe 跟着「最近操作过的那份 PDF」走。
 import { EventBus, PDFFindController, PDFLinkService, PDFViewer, ensureWorker, pdfjsLib } from './pdf'
-import { acquire, release, baseOf, dirOf, type Annot, type AnnotDoc, type AnnotType } from './store'
+import { acquire, release, baseOf, dirOf, isTextMarkup, type Annot, type AnnotDoc, type AnnotType, type TextMarkup } from './store'
 import { paintSelection, selectionAnchor } from './selection'
 import { selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
 import { icon } from './icons'
@@ -40,19 +40,19 @@ export const TOOL_KEY: Record<string, string> = { select: 'V', highlight: 'H', u
 const HEX = /^#[0-9a-f]{6}$/
 const RECENT_KEY = 'forsion-pdf-reader.colors'
 const MARK_COLORS_KEY = 'forsion-pdf-reader.tool-colors'
-type TextMarkup = 'highlight' | 'underline' | 'strike'
-const isTextMarkup = (type: unknown): type is TextMarkup => type === 'highlight' || type === 'underline' || type === 'strike'
+const markColorKey = (tool: MarkTool): string => `${MARK_COLORS_KEY}.${tool}`
 let toolColors = markColors(null)
-let storedToolColors: string | null | undefined
-function readToolColors(): boolean {
+function readToolColors(): void {
   try {
-    const stored = localStorage.getItem(MARK_COLORS_KEY)
-    if (stored !== storedToolColors) {
-      toolColors = markColors(JSON.parse(stored ?? 'null'))
-      storedToolColors = stored
+    const legacy = localStorage.getItem(MARK_COLORS_KEY)
+    let stored = markColors(null)
+    try { stored = markColors(JSON.parse(legacy ?? 'null')) } catch { /* Retain the legacy entry. Picks are saved per tool. */ }
+    for (const tool of Object.keys(stored) as MarkTool[]) {
+      const color = localStorage.getItem(markColorKey(tool))
+      if (color && HEX.test(color)) stored[tool] = color
     }
-    return true
-  } catch { return false }
+    toolColors = stored
+  } catch { /* Keep the last readable colors when storage is unavailable. */ }
 }
 readToolColors()
 let recent: string[] = []
@@ -102,7 +102,8 @@ const setActive = (r: Reader | null): void => {
 export const allReaders = (): Reader[] => [...readers]
 
 export function syncMarkColors(event: StorageEvent): void {
-  if ((event.key === MARK_COLORS_KEY || event.key === null) && readToolColors()) {
+  if (event.key === MARK_COLORS_KEY || event.key === null || event.key.startsWith(MARK_COLORS_KEY + '.')) {
+    readToolColors()
     for (const reader of readers) reader.refreshMarkColor()
   }
 }
@@ -208,13 +209,8 @@ export class Reader {
   private colorTool(): MarkTool { return COLOR_TOOLS.includes(this.tool) ? this.tool as MarkTool : 'highlight' }
   private setMarkColor(tool: MarkTool, value: string): void {
     if (!HEX.test(value)) return
-    const readable = readToolColors()
     toolColors[tool] = value
-    if (readable) try {
-      const stored = JSON.stringify(toolColors)
-      localStorage.setItem(MARK_COLORS_KEY, stored)
-      storedToolColors = stored
-    } catch { /* Keep the in-memory preference. */ }
+    try { localStorage.setItem(markColorKey(tool), value) } catch { /* Keep the in-memory preference. */ }
     for (const reader of readers) reader.refreshMarkColor()
   }
   refreshMarkColor(): void {
@@ -758,10 +754,13 @@ export class Reader {
     const kind = from.closest<HTMLElement>('.pr-pop')?.dataset.kind
     if (kind === 'sel') { this.color = c; this.markSelection('highlight'); this.renderToolbar(); return }
     if (kind === 'card') {
-      const a = this.doc?.data.annots.find(annot => annot.id === this.selected)
-      if (!a) return
-      this.doc?.patch(a.id, { color: c })
-      if (isTextMarkup(a.type)) this.setMarkColor(a.type, c)
+      const doc = this.doc
+      const a = doc?.data.annots.find(annot => annot.id === this.selected)
+      if (!doc || !a) return
+      if (isTextMarkup(a.type)) {
+        doc.recolor(new Set([a.id]), c)
+        this.setMarkColor(a.type, c)
+      } else doc.patch(a.id, { color: c })
       this.pop?.querySelector<HTMLElement>('.pr-color-current')?.style.setProperty('--c', c)
       // 重画这一排:刚用取色器挑的那种原来不在里面。被点的那颗跟着换掉了,键盘焦点还给新的那颗(不然掉到 body 上,Esc、撤销没人听)。
       const dots = this.pop!.querySelector('.pr-dots')!, had = dots.contains(document.activeElement)
@@ -1059,7 +1058,7 @@ export class Reader {
     if ((ev.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
     // 空格 = 临时抓手。在捕获阶段拦下:焦点在白板层上时引擎也拿空格当抓手,它挪的是自己的画布、和页面对不上。
     // 焦点在按钮上时空格本是「按下按钮」,这里也拦:阅读器里空格只有这一个意思。
-    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
+    if (ev.key === ' ' && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.isComposing && !(ev.target as HTMLElement).closest?.('.pr-shape-ui button, .pr-shape-pin, .pr-mark-colors button')) { ev.preventDefault(); ev.stopPropagation(); if (!ev.repeat) this.setSpace(true); return }
     if ((ev.metaKey || ev.ctrlKey) && (k === 'z' || k === 'y')) {
       ev.preventDefault(); ev.stopPropagation() // 撤销只走我们这一本账(它会去叫引擎退一步),不让引擎自己再退一次
       if (k === 'y' || ev.shiftKey) this.redo(); else this.undo()
@@ -1202,9 +1201,7 @@ export class Reader {
     </div>`)
     const ids = new Set(marks.map(mark => mark.id))
     this.bindPalette(palette, color => {
-      const present = doc.data.annots.filter(mark => ids.has(mark.id))
-      for (const mark of present) doc.patch(mark.id, { color })
-      if (present.length) this.setMarkColor(type, color)
+      if (doc.recolor(ids, color)) this.setMarkColor(type, color)
       this.closePop()
     })
     this.showPop(palette, { ...anchor, centerX: (anchor.left + anchor.right) / 2 }, 'above')

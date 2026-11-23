@@ -5,7 +5,9 @@ import { isShape, shapeNote, withShapeNote } from './shape'
 
 type ChangeKind = 'ink' | 'shape-note'
 
-export type AnnotType = 'highlight' | 'underline' | 'strike' | 'note' | 'text' | 'area'
+export type TextMarkup = 'highlight' | 'underline' | 'strike'
+export type AnnotType = TextMarkup | 'note' | 'text' | 'area'
+export const isTextMarkup = (type: unknown): type is TextMarkup => type === 'highlight' || type === 'underline' || type === 'strike'
 
 export interface Annot {
   id: string
@@ -63,13 +65,13 @@ function parse(text: string): Partial<Sidecar> | null {
 
 /** 三方合并一组带 id 的条目:base = 上次盘上那份,ours = 内存里的,theirs = 盘上现在的(别的窗口写的)。
  *  两边各自新加的都留;一边删了另一边没动的 → 删;两边都改了同一条 → 留我们的。 */
-function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string, combine?: (base: T, ours: T, theirs: T) => T): T[] {
+function merge3<T>(base: T[], ours: T[], theirs: T[], id: (x: T) => string, stamp: (x: T) => string, combine?: (base: T, ours: T, theirs: T | undefined) => T | undefined): T[] {
   const b = new Map(base.map((x) => [id(x), x])), o = new Set(ours.map(id)), th = new Map(theirs.map((x) => [id(x), x]))
   const out: T[] = []
   for (const x of ours) {
     const bx = b.get(id(x)), tx = th.get(id(x)), mine = !bx || stamp(bx) !== stamp(x) // 我们新加的 / 改过的
-    if (tx) out.push(mine ? (combine && bx && stamp(bx) !== stamp(tx) ? combine(bx, x, tx) : x) : tx)
-    else if (mine) out.push(x)
+    const merged = mine ? (combine && bx && (!tx || stamp(bx) !== stamp(tx)) ? combine(bx, x, tx) : x) : tx
+    if (merged !== undefined) out.push(merged)
   }
   for (const x of theirs) if (!o.has(id(x)) && !b.has(id(x))) out.push(x)
   return out
@@ -96,12 +98,29 @@ function mergeInk(base: Ink, ours: Ink, theirs: Ink): Ink {
     updated: Date.now(),
   } }
 }
+/** Color-only edits follow the surviving annotation and never undo its removal. */
+function mergeAnnotation(base: Annot, ours: Annot, theirs: Annot | undefined): Annot | undefined {
+  if (!isTextMarkup(base.type)) return ours
+  const content = (annot: Annot): string => {
+    const { color, modified, ...rest } = annot
+    return JSON.stringify(rest)
+  }
+  const baseContent = content(base)
+  if (ours.color !== base.color && content(ours) === baseContent) {
+    return theirs && { ...theirs, color: ours.color, modified: ours.modified }
+  }
+  if (theirs && ours.color === base.color && theirs.color !== base.color && content(theirs) === baseContent) {
+    return { ...ours, color: theirs.color }
+  }
+  return ours
+}
+
 function mergeSidecar(base: Partial<Sidecar> | null, ours: Sidecar, theirs: Partial<Sidecar>): Sidecar {
   const ink: Record<string, any[]> = {}
-  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.versionNonce}:${x.el?.x}:${x.el?.y}`, mergeInk)) (ink[page] ??= []).push(el)
+  for (const { page, el } of merge3(inkList(base?.ink), inkList(ours.ink), inkList(theirs.ink), (x) => String(x.el?.id), (x) => `${x.page}:${x.el?.version}:${x.el?.versionNonce}:${x.el?.x}:${x.el?.y}`, (b, o, t) => t ? mergeInk(b, o, t) : o)) (ink[page] ??= []).push(el)
   return {
     version: VERSION, fingerprint: ours.fingerprint, note: ours.note ?? theirs.note, ink,
-    annots: merge3(base?.annots ?? [], ours.annots, theirs.annots ?? [], (a) => a.id, (a) => a.modified),
+    annots: merge3(base?.annots ?? [], ours.annots, theirs.annots ?? [], (a) => a.id, (a) => a.modified, mergeAnnotation),
   }
 }
 
@@ -279,6 +298,18 @@ export class AnnotDoc {
     if (!a) return
     Object.assign(a, p, { modified: new Date().toISOString() })
     this.changed()
+  }
+
+  recolor(ids: ReadonlySet<string>, color: string): boolean {
+    const marks = this.data.annots.filter(a => ids.has(a.id))
+    const changed = marks.filter(a => a.color !== color)
+    if (changed.length) {
+      const modified = new Date().toISOString()
+      for (const mark of changed) Object.assign(mark, { color, modified })
+      this.changed()
+      void this.flush()
+    }
+    return marks.length > 0
   }
 
   remove(id: string): void { this.removeMany([id]) }

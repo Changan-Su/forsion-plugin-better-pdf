@@ -169,6 +169,34 @@ await t('两个窗口各开同一份 PDF:各写各的不互相盖,删掉的也�
   b.patch(b.data.annots[0].id, { comment: '改' }); await b.flush()
   A.deepEqual(saved(files, '.F.pdf.annot.json').annots.map((n) => n.text), ['乙'], '甲删掉的被乙带回来了')
 })
+await t('划线调色保留另一窗口的备注并尊重删除，跨页批注一起换色', async () => {
+  for (const otherEdit of ['comment-first', 'comment-last', 'delete']) {
+    const { files } = fakeHost()
+    const filename = '.Markup.pdf.annot.json'
+    const base = { ...A1, id: 'text-a', created: '2026-01-01', modified: '2026-01-01' }
+    const secondPage = { ...base, id: 'text-b', page: 1 }
+    files.set(filename, enc.encode(JSON.stringify({ version: 1, fingerprint: 'markup', annots: [base, secondPage], ink: {} })))
+    const W1 = await load('src/store.ts'), W2 = await load('src/store.ts')
+    const colors = await W1.acquire('Markup.pdf', 'markup'), other = await W2.acquire('Markup.pdf', 'markup')
+    const recolor = async () => {
+      A.equal(colors.recolor(new Set([base.id, secondPage.id]), '#2ea8e5'), true)
+      await colors.flush()
+    }
+    if (otherEdit === 'comment-last') await recolor()
+    if (otherEdit === 'delete') other.remove(base.id)
+    else other.patch(base.id, { comment: 'Saved in the other reader' })
+    await other.flush()
+    if (otherEdit !== 'comment-last') await recolor()
+    const marks = saved(files, filename).annots
+    A.equal(marks.find(a => a.id === secondPage.id)?.color, '#2ea8e5')
+    if (otherEdit === 'delete') A.equal(marks.some(a => a.id === base.id), false)
+    else {
+      const first = marks.find(a => a.id === base.id)
+      A.equal(first.color, '#2ea8e5')
+      A.equal(first.comment, 'Saved in the other reader')
+    }
+  }
+})
 await t('两个窗口同时改图形备注和样式，保留两边的修改', async () => {
   for (const noteWritesLast of [true, false]) {
     const { files } = fakeHost()
