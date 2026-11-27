@@ -420,6 +420,22 @@ await t('选区几何:同一行的碎块并成一条,分栏不连', async () => 
   A.deepEqual(r.map((x) => [x.left, x.right, x.top]), [[0, 90, 0], [300, 340, 0], [0, 50, 20]])
 })
 
+await t('Text markup keeps closely spaced rows separate even when their glyph boxes overlap', async () => {
+  const { mergeLineRects } = await load('src/geom.ts')
+  const first = { left: 10, top: 0, right: 45, bottom: 20 }
+  const second = { left: 5, top: 14, right: 50, bottom: 34 }
+  const third = { left: 10, top: 28, right: 45, bottom: 48 }
+  A.deepEqual(mergeLineRects([third, first, second]), [first, second, third])
+})
+
+await t('PDF points account for independent width and height rounding in the displayed page', async () => {
+  const { pageAt } = await load('src/geom.ts')
+  const frame = { left: 10, top: 20, right: 109, bottom: 219, width: 99, height: 199 }
+  const viewport = { width: 100, height: 200, convertToPdfPoint: (x, y) => [x, 200 - y] }
+  const page = { textLayer: { div: { getBoundingClientRect: () => frame } }, viewport }
+  A.deepEqual(pageAt({ pagesCount: 1, getPageView: () => page }, frame.right, frame.bottom), { page: 0, x: 100, y: 0 })
+})
+
 await t('公式选区:正文/斜体/上标并成单行,桥接碎块不重叠,下一行和分栏保持分离', async () => {
   const { mergeLineRects } = await load('src/geom.ts')
   // Browser DOMRect coordinates are prototype getters, not enumerable own fields.

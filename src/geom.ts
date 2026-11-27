@@ -1,3 +1,5 @@
+import type { PageViewport } from 'pdfjs-dist'
+
 // 选区 / 点击 ↔ PDF 坐标。
 // ⚠️ 参考系用页的内容盒(textLayer / canvasWrapper),不用 .page 外框:pdf.js 给 .page 留了 9px 透明边框。
 // 两边都是 getBoundingClientRect 的客户区像素,所以应用整体缩放(界面缩放 110% 之类)不影响换算。
@@ -5,23 +7,45 @@
 interface Box { left: number; top: number; right: number; bottom: number }
 export interface PageQuads { page: number; quads: number[][] }
 
-/** 同一行里的选区碎块并成一条:垂直中心落在对方高度带内算同一行;水平间隙小于行高才并(词间空隙连上,分栏不连)。 */
+/** Group fragments by row before joining nearby words within each row. */
 export function mergeLineRects(rects: Box[]): Box[] {
-  const lines: Box[] = []
-  // Tall body glyphs establish rows before small superscripts. Merge transitively so
-  // a bridging glyph cannot leave two overlapping bands with doubled opacity.
-  for (const r of [...rects].sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))) {
-    let band = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
-    for (let i = 0; i < lines.length;) {
-      const l = lines[i], h = Math.min(l.bottom - l.top, band.bottom - band.top)
-      const overlap = Math.min(l.bottom, band.bottom) - Math.max(l.top, band.top)
-      const gap = Math.max(l.left - band.right, band.left - l.right)
-      if (overlap > h * 0.2 && gap < Math.max(l.bottom - l.top, band.bottom - band.top) * 0.6) {
-        band = { left: Math.min(l.left, band.left), right: Math.max(l.right, band.right), top: Math.min(l.top, band.top), bottom: Math.max(l.bottom, band.bottom) }
-        lines.splice(i, 1); i = 0
-      } else i++
+  const rows: Array<{ anchor: Box; fragments: Box[] }> = []
+  // Keep each row anchored to its tallest fragment. An expanding union can
+  // otherwise pull in adjacent lines through overlapping glyph boxes or scripts.
+  for (const rect of [...rects].sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))) {
+    let nearest: (typeof rows)[number] | undefined
+    let distance = Infinity
+    for (const row of rows) {
+      const { anchor } = row
+      const overlap = Math.min(anchor.bottom, rect.bottom) - Math.max(anchor.top, rect.top)
+      if (overlap <= Math.min(anchor.bottom - anchor.top, rect.bottom - rect.top) / 2) continue
+      const delta = Math.abs((anchor.top + anchor.bottom) - (rect.top + rect.bottom))
+      if (delta >= distance) continue
+      nearest = row
+      distance = delta
+      if (distance === 0) break
     }
-    lines.push(band)
+    if (nearest) nearest.fragments.push(rect)
+    else rows.push({ anchor: rect, fragments: [rect] })
+  }
+
+  const lines: Box[] = []
+  for (const { fragments } of rows) {
+    let band: Box | undefined
+    let height = 0
+    for (const { left, top, right, bottom } of fragments.sort((a, b) => a.left - b.left)) {
+      const fragmentHeight = bottom - top
+      if (band && left - band.right < Math.max(height, fragmentHeight) * 0.6) {
+        band.right = Math.max(band.right, right)
+        band.top = Math.min(band.top, top)
+        band.bottom = Math.max(band.bottom, bottom)
+        height = Math.max(height, fragmentHeight)
+      } else {
+        band = { left, top, right, bottom }
+        lines.push(band)
+        height = fragmentHeight
+      }
+    }
   }
   return lines.sort((a, b) => a.top - b.top || a.left - b.left)
 }
@@ -29,13 +53,17 @@ export function mergeLineRects(rects: Box[]): Box[] {
 /** 页的内容盒;这一页还没渲染出来时是 null。 */
 export const frameOf = (pv: any): DOMRect | null => {
   const el: HTMLElement | null = pv?.textLayer?.div ?? pv?.div?.querySelector('.canvasWrapper') ?? null
-  return el ? el.getBoundingClientRect() : null
+  const frame = el?.getBoundingClientRect()
+  return frame?.width && frame.height ? frame : null
 }
 
-/** 客户区点 → 这一页的 PDF 用户空间坐标。客户区像素先按内容盒的实际宽度换成 pdf.js 视口像素。 */
+/** Convert the rounded client frame to viewport pixels independently on each axis. */
 const toPdf = (pv: any, frame: DOMRect, x: number, y: number): [number, number] => {
-  const k = pv.viewport.width / frame.width
-  return pv.viewport.convertToPdfPoint((x - frame.left) * k, (y - frame.top) * k)
+  const { viewport } = pv
+  return viewport.convertToPdfPoint(
+    (x - frame.left) * viewport.width / frame.width,
+    (y - frame.top) * viewport.height / frame.height,
+  )
 }
 
 /** 当前窗口选区 → 各页的 quads。没有选区,或选区不在页面上 → []。 */
@@ -86,15 +114,18 @@ export function pointOnPage(viewer: any, page: number, x: number, y: number): [n
   return toPdf(pv, frame, Math.min(frame.right, Math.max(frame.left, x)), Math.min(frame.bottom, Math.max(frame.top, y)))
 }
 
-/** PDF 用户空间的两个角 → 页面 pt 坐标(y 向下,已含页面旋转)的 [x, y, w, h]。vp1 = 这一页缩放为 1 的视口。 */
-export function toPageBox(vp1: any, x0: number, y0: number, x1: number, y1: number): [number, number, number, number] {
+/** The mark layer's CSS scale already includes /UserUnit. */
+export const markViewport = (viewport: PageViewport): PageViewport => viewport.clone({ scale: 1 / viewport.userUnit })
+
+/** PDF 用户空间的两个角 → 页面坐标(y 向下,已含页面旋转)的 [x, y, w, h]。 */
+export function toPageBox(vp1: PageViewport, x0: number, y0: number, x1: number, y1: number): [number, number, number, number] {
   const [a, b] = vp1.convertToViewportPoint(x0, y0)
   const [c, d] = vp1.convertToViewportPoint(x1, y1)
   return [Math.min(a, c), Math.min(b, d), Math.abs(a - c), Math.abs(b - d)]
 }
 
-/** 一条 quad → 页面 pt 的 [x, y, w, h]。 */
-export const quadBox = (vp1: any, q: number[]): [number, number, number, number] => toPageBox(vp1, q[0], q[1], q[6], q[7])
+/** 一条 quad → 页面坐标的 [x, y, w, h]。 */
+export const quadBox = (vp1: PageViewport, q: number[]): [number, number, number, number] => toPageBox(vp1, q[0], q[1], q[6], q[7])
 
 // ── 白板元素(笔迹 / 形状)的几何:选择工具判断「指针底下是不是画上去的东西」用 ──
 type Bounds = [number, number, number, number]

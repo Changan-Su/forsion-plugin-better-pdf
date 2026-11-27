@@ -3,7 +3,7 @@
 import { EventBus, PDFFindController, PDFLinkService, PDFViewer, ensureWorker, pdfjsLib } from './pdf'
 import { acquire, release, baseOf, dirOf, isTextMarkup, type Annot, type AnnotDoc, type AnnotType, type TextMarkup } from './store'
 import { paintSelection, selectionAnchor } from './selection'
-import { selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
+import { markViewport, selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
 import { icon } from './icons'
 import { t } from './i18n'
 import { tooltips } from './tooltips'
@@ -801,7 +801,7 @@ export class Reader {
   }
 
   // ── 页面上的批注层 ────────────────────────────────────────────────────────────────
-  /** 一页的批注层:inset 0 铺在页内容盒上,子元素的位置用 pt 写进变量,再由 pdf.js 的缩放系数换成像素,所以缩放不用重排。 */
+  /** 一页的批注层:inset 0 铺在页内容盒上,位置以 PDF 页面单位写进变量,再由 pdf.js 的缩放系数换成像素。 */
   layerOf(i: number, create = true): HTMLElement | null {
     const div: HTMLElement | undefined = this.viewer.getPageView(i)?.div
     if (!div) return null
@@ -820,7 +820,7 @@ export class Reader {
     const layer = this.layerOf(i)
     const pv = this.viewer.getPageView(i)
     if (!layer || !pv || !this.doc) return
-    const vp1 = pv.viewport.clone({ scale: 1 })
+    const vp1 = markViewport(pv.viewport)
     const pos = (b: number[]): string => `--x:${n2(b[0])};--y:${n2(b[1])};--w:${n2(b[2])};--h:${n2(b[3])}`
     const out: string[] = []
     for (const a of this.doc.data.annots) {
@@ -1327,8 +1327,9 @@ export class Reader {
     for (const g of this.container.querySelectorAll('.pr-ghosts')) g.remove()
     const cls = this.tool === 'highlight' ? 'pr-hl' : 'pr-ul'
     for (const p of pages ?? []) {
-      const vp1 = this.viewer.getPageView(p.page)?.viewport.clone({ scale: 1 })
-      if (!vp1) continue
+      const viewport = this.viewer.getPageView(p.page)?.viewport
+      if (!viewport) continue
+      const vp1 = markViewport(viewport)
       this.layerOf(p.page)?.append(el(`<div class="pr-marks pr-ghosts">${p.quads.map((q) => { const b = quadBox(vp1, q); return `<i class="${cls}" style="--x:${n2(b[0])};--y:${n2(b[1])};--w:${n2(b[2])};--h:${n2(b[3])};--c:${this.color}"></i>` }).join('')}</div>`))
     }
   }
