@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.1.18 — 2026-11-27
+
+- 修复紧排行被合成一条下划线、下划线压到下一行，以及使用自定义页面单位的 PDF 批注错位。紧排行的同一条高亮只着色一次。
+- 工具栏和色板的圆角跟随 Forsion 的界面设置。
+
+- Fixed misaligned text markup in tightly spaced lines and PDFs with custom page units. Underlines stay close to the text, and overlapping fragments of the same highlight receive one layer of color.
+- Toolbar and color palette corners follow Forsion’s appearance settings.
+
 ## 0.1.17 — 2026-11-23
 
 - 放大 PDF 后，按住 Shift 滚动鼠标滚轮即可横向移动。手形和手写模式都支持这一操作。
