@@ -151,16 +151,18 @@
 /* ── 页面上的批注层 ──
    ⚠️ .pr-layer / .pr-marks 不许有 z-index、opacity、transform:一建层叠上下文,高亮的「正片叠底」就叠不到页面上了。 */
 .pr-layer, .pr-marks { position: absolute; inset: 0; pointer-events: none; }
-.pr-marks > * {
+.pr-marks > :not(.pr-highlight), .pr-highlight > .pr-hl {
   position: absolute; box-sizing: border-box;
   left: calc(var(--total-scale-factor) * var(--x) * 1px); top: calc(var(--total-scale-factor) * var(--y) * 1px);
 }
 .pr-hl, .pr-ul, .pr-st, .pr-area { width: calc(var(--total-scale-factor) * var(--w) * 1px); height: calc(var(--total-scale-factor) * var(--h) * 1px); }
-.pr-hl { background: var(--c); mix-blend-mode: multiply; opacity: .5; border-radius: 2px; }
-.pr-hl.sel { opacity: .78; }
+/* Blend all fragments of one highlight together so their overlap isn't painted twice. */
+.pr-highlight { position: absolute; inset: 0; mix-blend-mode: multiply; opacity: .5; }
+.pr-highlight.sel { opacity: .78; }
+.pr-hl { background: var(--c); border-radius: 2px; }
 /* 选中的批注:一圈实线(界面里不画虚线边框)。擦到一半的先变淡,抬起才真删。 */
-.pr-marks > .sel { outline: 1.5px solid var(--accent-ink, var(--accent)); outline-offset: 1.5px; }
-.pr-marks > .erasing { opacity: .2; }
+.pr-marks > .sel:not(.pr-highlight), .pr-highlight > .sel { outline: 1.5px solid var(--accent-ink, var(--accent)); outline-offset: 1.5px; }
+.pr-marks > .erasing, .pr-highlight:has(> .erasing) { opacity: .2; }
 .pr-ul, .pr-st { background: linear-gradient(var(--c), var(--c)) no-repeat; background-size: 100% max(1.5px, calc(var(--total-scale-factor) * 1.1px)); }
 /* The text range includes descent below the printed line. Keep the stroke closer to the glyphs. */
 .pr-ul { background-position: 0 80%; }

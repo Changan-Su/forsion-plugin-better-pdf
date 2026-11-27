@@ -102,4 +102,46 @@ exports.verify = async ({ win, check, until, SHOTS, readSidecar }) => {
   const actual = await boxes(marks(2))
   check('Custom page unit remains aligned after changing PDF zoom',
     aligned(actual, expected), JSON.stringify({ expected, actual }))
+
+  const startText = text(1, firstLine)
+  await startText.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  await win.locator('.pr-toolbar [data-v="highlight"]').click()
+  const crossPagePointer = 999
+  await win.evaluate(({ firstLine, scaledLine, crossPagePointer }) => {
+    const container = document.querySelector('.pr-container')
+    const spans = [...container.querySelectorAll('.textLayer span')]
+    const start = spans.find((el) => el.textContent === firstLine).firstChild
+    const end = spans.find((el) => el.textContent === scaledLine).firstChild
+    container.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: crossPagePointer, button: 0 }))
+    const range = document.createRange()
+    range.setStart(start, 0)
+    range.setEnd(end, end.length)
+    getSelection().removeAllRanges()
+    getSelection().addRange(range)
+  }, { firstLine, scaledLine, crossPagePointer })
+  const preview = win.locator('.pr-ghosts .pr-highlight')
+  const committed = win.locator('.pr-marks:not(.pr-ghosts) > .pr-highlight')
+  const groupState = (groups) => groups.evaluateAll((items) => items.map((group) => ({
+    page: Number(group.closest('.page').dataset.pageNumber),
+    blend: getComputedStyle(group).mixBlendMode,
+    alpha: getComputedStyle(group).opacity,
+    parts: [...group.children].map((part) => getComputedStyle(part).opacity),
+  })))
+  await until(async () => await preview.count() === 2)
+  const previewGroups = await groupState(preview)
+  await win.locator('.pr-container').evaluate((container, pointerId) =>
+    container.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId, button: 0 })), crossPagePointer)
+  const crossPage = await until(() => readSidecar()?.annots.length === 4 && readSidecar())
+  const groups = await groupState(committed)
+  const expectedGroups = [
+    { page: 1, blend: 'multiply', alpha: '0.5', parts: ['1', '1'] },
+    { page: 2, blend: 'multiply', alpha: '0.5', parts: ['1'] },
+  ]
+  check('Cross-page highlight composites each page once and saves separate quads per row',
+    JSON.stringify(previewGroups) === JSON.stringify(expectedGroups) &&
+    JSON.stringify(groups) === JSON.stringify(expectedGroups) &&
+    crossPage?.annots.slice(2).map((a) => `${a.page}:${a.quads.length}`).join() === '0:2,1:1',
+    JSON.stringify({ previewGroups, groups, saved: crossPage?.annots.map((a) => [a.page, a.quads.length]) }))
+  await closePalette()
+  await win.locator(selector(1)).screenshot({ path: path.join(SHOTS, 'mark-alignment-highlight.png') })
 }

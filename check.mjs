@@ -428,6 +428,17 @@ await t('Text markup keeps closely spaced rows separate even when their glyph bo
   A.deepEqual(mergeLineRects([third, first, second]), [first, second, third])
 })
 
+await t('Text markup keeps a raised script with its nearby row in staggered columns', async () => {
+  const { mergeLineRects } = await load('src/geom.ts')
+  const body = { left: 10, top: 6, right: 45, bottom: 26 }
+  const script = { left: 45, top: -2, right: 50, bottom: 10 }
+  const otherColumn = { left: 90, top: 0, right: 125, bottom: 22 }
+  A.deepEqual(mergeLineRects([body, script, otherColumn]), [
+    { left: 10, top: -2, right: 50, bottom: 26 },
+    otherColumn,
+  ])
+})
+
 await t('PDF points account for independent width and height rounding in the displayed page', async () => {
   const { pageAt } = await load('src/geom.ts')
   const frame = { left: 10, top: 20, right: 109, bottom: 219, width: 99, height: 199 }

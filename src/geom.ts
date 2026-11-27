@@ -7,47 +7,51 @@ import type { PageViewport } from 'pdfjs-dist'
 interface Box { left: number; top: number; right: number; bottom: number }
 export interface PageQuads { page: number; quads: number[][] }
 
-/** Group fragments by row before joining nearby words within each row. */
-export function mergeLineRects(rects: Box[]): Box[] {
-  const rows: Array<{ anchor: Box; fragments: Box[] }> = []
-  // Keep each row anchored to its tallest fragment. An expanding union can
-  // otherwise pull in adjacent lines through overlapping glyph boxes or scripts.
-  for (const rect of [...rects].sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))) {
-    let nearest: (typeof rows)[number] | undefined
-    let distance = Infinity
-    for (const row of rows) {
-      const { anchor } = row
-      const overlap = Math.min(anchor.bottom, rect.bottom) - Math.max(anchor.top, rect.top)
-      if (overlap <= Math.min(anchor.bottom - anchor.top, rect.bottom - rect.top) / 2) continue
-      const delta = Math.abs((anchor.top + anchor.bottom) - (rect.top + rect.bottom))
-      if (delta >= distance) continue
-      nearest = row
-      distance = delta
-      if (distance === 0) break
-    }
-    if (nearest) nearest.fragments.push(rect)
-    else rows.push({ anchor: rect, fragments: [rect] })
-  }
+const heightOf = (box: Box) => box.bottom - box.top
+const centerY = (box: Box) => (box.top + box.bottom) / 2
 
-  const lines: Box[] = []
-  for (const { fragments } of rows) {
-    let band: Box | undefined
-    let height = 0
-    for (const { left, top, right, bottom } of fragments.sort((a, b) => a.left - b.left)) {
-      const fragmentHeight = bottom - top
-      if (band && left - band.right < Math.max(height, fragmentHeight) * 0.6) {
-        band.right = Math.max(band.right, right)
-        band.top = Math.min(band.top, top)
-        band.bottom = Math.max(band.bottom, bottom)
-        height = Math.max(height, fragmentHeight)
-      } else {
-        band = { left, top, right, bottom }
-        lines.push(band)
-        height = fragmentHeight
-      }
+function sameRow(a: Box, b: Box): boolean {
+  const shorter = Math.min(heightOf(a), heightOf(b))
+  const taller = Math.max(heightOf(a), heightOf(b))
+  const overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+  // Small scripts can sit near the edge of a normal line. Similar-sized text
+  // needs stronger overlap so densely spaced body lines stay separate.
+  return overlap > shorter * (shorter <= taller * 0.75 ? 0.2 : 0.5)
+}
+
+function union(a: Box, b: Box): Box {
+  return {
+    left: Math.min(a.left, b.left), top: Math.min(a.top, b.top),
+    right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom),
+  }
+}
+
+/** Join nearby fragments against the tallest text in each connected band. */
+export function mergeLineRects(rects: Box[]): Box[] {
+  const bands: Array<{ anchor: Box; bounds: Box }> = []
+  for (const rect of [...rects].sort((a, b) => heightOf(b) - heightOf(a))) {
+    const matches = bands.filter(({ anchor, bounds }) => {
+      const gap = Math.max(bounds.left - rect.right, rect.left - bounds.right)
+      return gap < Math.max(heightOf(anchor), heightOf(rect)) * 0.6 && sameRow(anchor, rect)
+    })
+    if (!matches.length) {
+      const { left, top, right, bottom } = rect
+      bands.push({ anchor: rect, bounds: { left, top, right, bottom } })
+      continue
+    }
+    const center = centerY(rect)
+    const [nearest, ...others] = matches.sort((a, b) =>
+      Math.abs(centerY(a.anchor) - center) - Math.abs(centerY(b.anchor) - center))
+    nearest.bounds = union(nearest.bounds, rect)
+    for (const band of others) {
+      // A script can touch two rows. Join both only if the rows themselves match.
+      if (!sameRow(nearest.anchor, band.anchor)) continue
+      nearest.bounds = union(nearest.bounds, band.bounds)
+      if (heightOf(nearest.anchor) < heightOf(band.anchor)) nearest.anchor = band.anchor
+      bands.splice(bands.indexOf(band), 1)
     }
   }
-  return lines.sort((a, b) => a.top - b.top || a.left - b.left)
+  return bands.map(({ bounds }) => bounds).sort((a, b) => a.top - b.top || a.left - b.left)
 }
 
 /** 页的内容盒;这一页还没渲染出来时是 null。 */
