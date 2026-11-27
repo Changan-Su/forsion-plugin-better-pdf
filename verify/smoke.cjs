@@ -39,6 +39,7 @@ const LINKS = process.env.ONLY === 'links'
 // ONLY=parity:只走 ⑯(白板的用法:快捷键、自定义颜色、笔尾橡皮、手指连点两下),自己画自己擦,不靠前面留下的东西。
 const PARITY = process.env.ONLY === 'parity'
 const SELECTION = process.env.ONLY === 'selection'
+const MARK_ALIGNMENT = process.env.ONLY === 'mark-alignment'
 // ONLY=stage:摆台。起一份**看得见**的隔离实例(库名「ZZ-验收库」,里面一篇四页的论文样张和一条空笔记),装好本仓的插件就停住,
 // 不跑任何检查 —— 给人或 computer use 照真实工作流上手体验用。Ctrl-C / 杀掉本进程即收场。建议带 UI_ZOOM=1.1。
 const STAGE = process.env.ONLY === 'stage'
@@ -155,7 +156,8 @@ async function dragSelect(win, needle, page = 1) {
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-pdfreader-'))
   const vault = path.join(home, STAGE ? 'ZZ-验收库' : 'Vault'); fs.mkdirSync(path.join(vault, FOLDER), { recursive: true })
-  await (STAGE ? makePaper : makePdf)(path.join(vault, FOLDER, PDF))
+  const fixture = MARK_ALIGNMENT && require('./mark-alignment.cjs')
+  await (fixture ? fixture.makePdf : STAGE ? makePaper : makePdf)(path.join(vault, FOLDER, PDF))
   if (STAGE) fs.writeFileSync(path.join(vault, '读后记.md'), '# 读后记\n\n')
   // 第一条:把 PDF 拖进笔记得到的不带页码的链接(⑭);后两条:「复制引用」贴出来的带页码的链接、聊天引用那种带引语的(⑮)。
   fs.writeFileSync(path.join(vault, '选题.md'), `# 选题\n\n[[${PDF}]]\n\n[[${PDF}#page=3|第 3 页]]\n\n[[${PDF}#page=2&q=nine-page%20document|引语]]\n`)
@@ -188,8 +190,11 @@ async function main() {
     await new Promise((r) => { app.on('close', r); process.on('SIGINT', r); process.on('SIGTERM', r) })
     await app.close().catch(() => {}); await stub.close?.(); return
   }
-  if (SELECTION) {
-    try { await require('./selection.cjs')({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP }) }
+  if (SELECTION || fixture) {
+    try {
+      if (fixture) await fixture.verify({ win, check, until, SHOTS, readSidecar })
+      else await require('./selection.cjs')({ app, win, check, until, SHOTS, dragSelect, S1, SELPOP })
+    }
     finally { await app.close(); await stub.close?.() }
     check('No page errors', errors.length === 0, errors.join(' | '))
     process.exit(fails.length ? 1 : 0)

@@ -3,7 +3,7 @@
 import { EventBus, PDFFindController, PDFLinkService, PDFViewer, ensureWorker, pdfjsLib } from './pdf'
 import { acquire, release, baseOf, dirOf, isTextMarkup, type Annot, type AnnotDoc, type AnnotType, type TextMarkup } from './store'
 import { paintSelection, selectionAnchor } from './selection'
-import { selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
+import { markViewport, selectedTextRects, pageAt, quadBox, selectionToQuads, toPageBox, type PageQuads } from './geom'
 import { icon } from './icons'
 import { t } from './i18n'
 import { tooltips } from './tooltips'
@@ -84,6 +84,20 @@ const inPop = (ev: Event): boolean => ev.composedPath().some((n) => n instanceof
 export const richNotes = (): boolean => !!(ctx.ui?.mountMarkdown && ctx.ui.mountMarkdownEditor)
 export const esc = (s: string): string => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const n2 = (x: number): string => x.toFixed(2)
+const boxStyle = ([x, y, w, h]: number[]): string => `--x:${n2(x)};--y:${n2(y)};--w:${n2(w)};--h:${n2(h)}`
+const annotationParts = '.pr-marks > [data-a], .pr-highlight > [data-a]'
+
+function textMarks(
+  type: AnnotType, viewport: ReturnType<typeof markViewport>, quads: number[][], color: string,
+  attribute = '', selected = false,
+): string {
+  const cls = type === 'highlight' ? 'pr-hl' : type === 'underline' ? 'pr-ul' : 'pr-st'
+  const selection = selected ? ' sel' : ''
+  const fragments = quads.map((q) =>
+    `<i class="${cls}${selection}" ${attribute} style="${boxStyle(quadBox(viewport, q))};--c:${color}"></i>`).join('')
+  return type === 'highlight' ? `<div class="pr-highlight${selection}">${fragments}</div>` : fragments
+}
+
 const el = <T extends HTMLElement = HTMLElement>(html: string): T => {
   const d = document.createElement('template')
   d.innerHTML = html.trim()
@@ -801,7 +815,7 @@ export class Reader {
   }
 
   // ── 页面上的批注层 ────────────────────────────────────────────────────────────────
-  /** 一页的批注层:inset 0 铺在页内容盒上,子元素的位置用 pt 写进变量,再由 pdf.js 的缩放系数换成像素,所以缩放不用重排。 */
+  /** 一页的批注层:inset 0 铺在页内容盒上,位置以 PDF 页面单位写进变量,再由 pdf.js 的缩放系数换成像素。 */
   layerOf(i: number, create = true): HTMLElement | null {
     const div: HTMLElement | undefined = this.viewer.getPageView(i)?.div
     if (!div) return null
@@ -820,21 +834,19 @@ export class Reader {
     const layer = this.layerOf(i)
     const pv = this.viewer.getPageView(i)
     if (!layer || !pv || !this.doc) return
-    const vp1 = pv.viewport.clone({ scale: 1 })
-    const pos = (b: number[]): string => `--x:${n2(b[0])};--y:${n2(b[1])};--w:${n2(b[2])};--h:${n2(b[3])}`
+    const vp1 = markViewport(pv.viewport)
     const out: string[] = []
     for (const a of this.doc.data.annots) {
       if (a.page !== i) continue
       const sel = this.sel.has(a.id) ? ' sel' : ''
       const at = `data-a="${a.id}"`
       if (a.quads) {
-        const cls = a.type === 'highlight' ? 'pr-hl' : a.type === 'underline' ? 'pr-ul' : 'pr-st'
-        for (const q of a.quads) out.push(`<i class="${cls}${sel}" ${at} style="${pos(quadBox(vp1, q))};--c:${a.color}"></i>`)
+        out.push(textMarks(a.type, vp1, a.quads, a.color, at, this.sel.has(a.id)))
       } else if (a.rect) {
         const b = toPageBox(vp1, a.rect[0], a.rect[1], a.rect[2], a.rect[3])
-        if (a.type === 'note') out.push(`<button class="pr-note${sel}" ${at} style="${pos(b)};--c:${a.color}" title="${esc(a.comment || t('kind.note'))}">${icon('sticky-note', 12)}</button>`)
-        else if (a.type === 'text') out.push(`<div class="pr-text${sel}" ${at} style="${pos(b)};--c:${a.color}" contenteditable="plaintext-only" spellcheck="false">${esc(a.text ?? '')}</div>`)
-        else out.push(`<div class="pr-area${sel}" ${at} style="${pos(b)};--c:${a.color}"></div>`)
+        if (a.type === 'note') out.push(`<button class="pr-note${sel}" ${at} style="${boxStyle(b)};--c:${a.color}" title="${esc(a.comment || t('kind.note'))}">${icon('sticky-note', 12)}</button>`)
+        else if (a.type === 'text') out.push(`<div class="pr-text${sel}" ${at} style="${boxStyle(b)};--c:${a.color}" contenteditable="plaintext-only" spellcheck="false">${esc(a.text ?? '')}</div>`)
+        else out.push(`<div class="pr-area${sel}" ${at} style="${boxStyle(b)};--c:${a.color}"></div>`)
       }
     }
     // 正在页面上打字的那个文字框不能被换掉(换掉就丢焦点):这时整页先不重画,失焦时再画。
@@ -1008,7 +1020,7 @@ export class Reader {
     for (let i = 1; i <= n; i++) {
       const px = p.lx + ((x - p.lx) * i) / n, py = p.ly + ((y - p.ly) * i) / n
       const layer = this.layers.get(pageAt(this.viewer, px, py)?.page ?? -1)
-      for (const m of layer?.querySelectorAll<HTMLElement>('.pr-marks > [data-a]') ?? []) {
+      for (const m of layer?.querySelectorAll<HTMLElement>(annotationParts) ?? []) {
         const r = m.getBoundingClientRect()
         if (px < r.left - 2 || px > r.right + 2 || py < r.top - 2 || py > r.bottom + 2) continue
         p.erased.add(m.dataset.a!)
@@ -1022,7 +1034,7 @@ export class Reader {
   /** 整个落在这块客户区矩形里的批注(跨几行的高亮要每一行都在里面)。 */
   private annotsWithin(r: { left: number; top: number; right: number; bottom: number }): string[] {
     const inside = new Map<string, boolean>()
-    for (const m of this.container.querySelectorAll<HTMLElement>('.pr-marks > [data-a]')) {
+    for (const m of this.container.querySelectorAll<HTMLElement>(annotationParts)) {
       const b = m.getBoundingClientRect(), id = m.dataset.a!
       inside.set(id, (inside.get(id) ?? true) && b.left >= r.left && b.top >= r.top && b.right <= r.right && b.bottom <= r.bottom)
     }
@@ -1325,11 +1337,12 @@ export class Reader {
   }
   private ghost(pages: PageQuads[] | null): void {
     for (const g of this.container.querySelectorAll('.pr-ghosts')) g.remove()
-    const cls = this.tool === 'highlight' ? 'pr-hl' : 'pr-ul'
+    const type = this.tool === 'highlight' ? 'highlight' : 'underline'
     for (const p of pages ?? []) {
-      const vp1 = this.viewer.getPageView(p.page)?.viewport.clone({ scale: 1 })
-      if (!vp1) continue
-      this.layerOf(p.page)?.append(el(`<div class="pr-marks pr-ghosts">${p.quads.map((q) => { const b = quadBox(vp1, q); return `<i class="${cls}" style="--x:${n2(b[0])};--y:${n2(b[1])};--w:${n2(b[2])};--h:${n2(b[3])};--c:${this.color}"></i>` }).join('')}</div>`))
+      const viewport = this.viewer.getPageView(p.page)?.viewport
+      if (!viewport) continue
+      const vp1 = markViewport(viewport)
+      this.layerOf(p.page)?.append(el(`<div class="pr-marks pr-ghosts">${textMarks(type, vp1, p.quads, this.color)}</div>`))
     }
   }
 

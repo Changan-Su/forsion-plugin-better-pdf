@@ -128,6 +128,8 @@ Requires desktop Forsion 2.13.0 or newer. Desktop only. With the companion deskt
 
 跨页选区 / 公式色带 / 临时提问面板回归：`GENESIS_DESKTOP=<built desktop> npm run check:selection`；`UI_ZOOM=1.1` 验证界面缩放。
 
+划线对齐 / Text markup alignment: `GENESIS_DESKTOP=<built desktop> UI_ZOOM=1.1 npm run check:mark-alignment` checks closely spaced rows, cropped pages with custom PDF units, cross-page highlights, and alignment after zoom.
+
 
 ## 0.1.10 交互修订 / Interaction revision 0.1.10
 
